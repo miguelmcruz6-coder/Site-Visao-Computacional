@@ -1,24 +1,45 @@
 // =====================================================
-// CONTROLE POR GESTOS
-// CÂMERA + MEDIAPIPE HANDS + MQTT
+// SISTEMA DE CONTROLE POR GESTOS
+// GitHub Pages + MediaPipe + HiveMQ Cloud + ESP32
 // =====================================================
 
 // =====================================================
-// MQTT
+// CONFIGURAÇÃO HIVEMQ CLOUD
 // =====================================================
-
-const MQTT_HOST = "broker.hivemq.com";
-
-// ATENÇÃO:
-// Esta porta é para WebSocket.
-// Se o site estiver no GitHub Pages (HTTPS), o broker
-// público pode bloquear a conexão WS sem TLS.
 //
-// Para teste local, 8000 pode funcionar.
-// Para GitHub Pages, veja a observação no final.
-const MQTT_PORT = 8000;
+// Pegue esses dados no:
+//
+// HiveMQ Cloud
+// → seu Cluster
+// → Overview
+// → Connection Details
+//
+// =====================================================
+
+const MQTT_HOST = "9927a23299b84ac78820c07e11c8d448.s1.eu.hivemq.cloud";
+
+const MQTT_PORT = 8884;
 
 const MQTT_PATH = "/mqtt";
+
+// -----------------------------------------------------
+// CREDENCIAIS
+// -----------------------------------------------------
+//
+// Crie uma credencial específica para o WEB no HiveMQ.
+//
+// NÃO coloque uma credencial administrativa aqui.
+// NÃO use a mesma credencial do ESP32 se o GitHub
+// for público.
+// -----------------------------------------------------
+
+const MQTT_USERNAME = "hivemq.webclient.1789562292116";
+
+const MQTT_PASSWORD = "jpFACDmz$jXzrHghKwz6ftrHACRxOow%";
+
+// =====================================================
+// TÓPICOS
+// =====================================================
 
 const MQTT_TOPIC = "automacao/maquina/dedos";
 
@@ -28,14 +49,20 @@ const MQTT_STOP_TOPIC = "automacao/maquina/emergencia";
 // CONFIGURAÇÕES
 // =====================================================
 
+// O ESP32 desliga os outputs depois de 1000 ms
+// sem receber mensagem.
+//
+// Portanto o navegador envia a cada 250 ms.
+
 const MQTT_INTERVAL = 250;
 
-// Quantidade de leituras iguais necessárias
-// antes de aceitar uma nova posição.
+// Quantidade de frames iguais necessários
+// para aceitar uma mudança.
+
 const STABILITY_FRAMES = 3;
 
 // =====================================================
-// ELEMENTOS
+// ELEMENTOS DA INTERFACE
 // =====================================================
 
 const video = document.getElementById("video");
@@ -78,17 +105,22 @@ let processingFrame = false;
 
 let emergencyActive = false;
 
-// Comando atualmente utilizado
+// =====================================================
+// COMANDO ATUAL
+// =====================================================
+
 let currentCommand = "00000";
 
-// Último comando detectado
+// =====================================================
+// ESTABILIZAÇÃO
+// =====================================================
+
 let detectedCommand = "";
 
-// Número de frames iguais
 let stableFrames = 0;
 
 // =====================================================
-// MQTT - STATUS
+// STATUS MQTT
 // =====================================================
 
 function setMqttStatus(text, online) {
@@ -104,7 +136,7 @@ function setMqttStatus(text, online) {
 }
 
 // =====================================================
-// MQTT - CONECTAR
+// CONECTAR MQTT
 // =====================================================
 
 function connectMQTT() {
@@ -120,13 +152,21 @@ function connectMQTT() {
     "_" +
     Math.random().toString(16).substring(2, 8);
 
-  const url = `ws://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
+  // -------------------------------------------------
+  // WSS
+  // -------------------------------------------------
 
-  console.log("MQTT:", url);
+  const url = `wss://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
+
+  console.log("Conectando ao HiveMQ:", url);
 
   try {
     mqttClient = mqtt.connect(url, {
       clientId: clientId,
+
+      username: MQTT_USERNAME,
+
+      password: MQTT_PASSWORD,
 
       clean: true,
 
@@ -137,8 +177,12 @@ function connectMQTT() {
       keepalive: 30,
     });
 
+    // =============================================
+    // CONECTADO
+    // =============================================
+
     mqttClient.on("connect", () => {
-      console.log("MQTT conectado!");
+      console.log("HiveMQ conectado!");
 
       setMqttStatus("conectado", true);
 
@@ -147,20 +191,32 @@ function connectMQTT() {
       }
     });
 
+    // =============================================
+    // RECONEXÃO
+    // =============================================
+
     mqttClient.on("reconnect", () => {
-      console.log("MQTT reconectando...");
+      console.log("Reconectando ao HiveMQ...");
 
       setMqttStatus("reconectando...", false);
     });
 
+    // =============================================
+    // ERRO
+    // =============================================
+
     mqttClient.on("error", (error) => {
-      console.error("Erro MQTT:", error);
+      console.error("Erro HiveMQ:", error);
 
       setMqttStatus("erro", false);
     });
 
+    // =============================================
+    // DESCONECTADO
+    // =============================================
+
     mqttClient.on("close", () => {
-      console.log("MQTT desconectado.");
+      console.log("HiveMQ desconectado.");
 
       setMqttStatus("desconectado", false);
 
@@ -169,38 +225,39 @@ function connectMQTT() {
       }
     });
   } catch (error) {
-    console.error("Falha ao criar conexão MQTT:", error);
+    console.error("Erro ao criar cliente MQTT:", error);
 
     setMqttStatus("erro", false);
   }
 }
 
 // =====================================================
-// MQTT - PUBLICAR COMANDO
+// PUBLICAR COMANDO
 // =====================================================
 
-function publishCommand(value) {
+function publishCommand(command) {
   if (!mqttClient || !mqttClient.connected) {
     return;
   }
 
-  mqttClient.publish(MQTT_TOPIC, value, {
+  mqttClient.publish(MQTT_TOPIC, command, {
     qos: 0,
     retain: false,
   });
 
-  console.log("MQTT →", value);
+  console.log("MQTT →", MQTT_TOPIC, command);
 }
 
 // =====================================================
-// ENVIO PERIÓDICO
+// WATCHDOG DO ESP32
 // =====================================================
 //
-// O ESP32 possui:
+// Envia continuamente o último comando.
 //
-// TIMEOUT_MQTT = 1000 ms
+// 250 ms < 1000 ms
 //
-// Por isso enviamos a cada 250 ms.
+// Portanto o ESP32 recebe várias mensagens
+// antes do timeout de segurança.
 // =====================================================
 
 setInterval(() => {
@@ -221,7 +278,7 @@ setInterval(() => {
 
 function publishEmergency() {
   if (!mqttClient || !mqttClient.connected) {
-    alert("Conecte ao MQTT primeiro.");
+    alert("Conecte ao HiveMQ primeiro.");
 
     return;
   }
@@ -235,16 +292,16 @@ function publishEmergency() {
 
   setCommand("00000");
 
-  console.log("EMERGÊNCIA → STOP");
+  console.warn("EMERGÊNCIA ATIVADA");
 }
 
 // =====================================================
-// RESET
+// RESET EMERGÊNCIA
 // =====================================================
 
 function resetEmergency() {
   if (!mqttClient || !mqttClient.connected) {
-    alert("Conecte ao MQTT primeiro.");
+    alert("Conecte ao HiveMQ primeiro.");
 
     return;
   }
@@ -258,15 +315,15 @@ function resetEmergency() {
 
   setCommand("00000");
 
-  console.log("EMERGÊNCIA → RESET");
+  console.log("Emergência resetada.");
 }
 
 // =====================================================
-// ATUALIZA INTERFACE
+// ATUALIZAR COMANDO
 // =====================================================
 
 function setCommand(value) {
-  if (typeof value !== "string" || !/^[01]{5}$/.test(value)) {
+  if (!/^[01]{5}$/.test(value)) {
     return;
   }
 
@@ -279,6 +336,10 @@ function setCommand(value) {
   if (messageElement) {
     messageElement.textContent = value;
   }
+
+  // -------------------------------------------------
+  // INDICADORES
+  // -------------------------------------------------
 
   for (let i = 0; i < 5; i++) {
     const light = document.getElementById(`finger${i}`);
@@ -300,52 +361,12 @@ function setCommand(value) {
 }
 
 // =====================================================
-// ESCONDER MENSAGEM DA CÂMERA
-// =====================================================
-
-function hideCameraMessage() {
-  if (!cameraMessage) {
-    return;
-  }
-
-  // Primeiro removemos qualquer display
-  // definido pelo CSS.
-  cameraMessage.style.display = "none";
-
-  cameraMessage.style.visibility = "hidden";
-
-  cameraMessage.style.opacity = "0";
-}
-
-// =====================================================
-// MOSTRAR MENSAGEM DA CÂMERA
-// =====================================================
-
-function showCameraMessage() {
-  if (!cameraMessage) {
-    return;
-  }
-
-  cameraMessage.style.display = "flex";
-
-  cameraMessage.style.visibility = "visible";
-
-  cameraMessage.style.opacity = "1";
-}
-
-// =====================================================
-// INICIAR CÂMERA
+// CÂMERA
 // =====================================================
 
 async function startCameraFunction() {
   try {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("getUserMedia não está disponível.");
-    }
-
     cameraStatus.textContent = "Solicitando câmera...";
-
-    console.log("Solicitando acesso à câmera...");
 
     cameraStream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -360,21 +381,14 @@ async function startCameraFunction() {
         height: {
           ideal: 720,
         },
-
-        frameRate: {
-          ideal: 30,
-        },
       },
 
       audio: false,
     });
 
-    console.log("Permissão da câmera concedida.");
-
     video.srcObject = cameraStream;
 
-    // Espera o navegador realmente carregar
-    // as dimensões do vídeo.
+    // Espera o vídeo carregar
     await new Promise((resolve) => {
       if (video.readyState >= 2) {
         resolve();
@@ -389,19 +403,15 @@ async function startCameraFunction() {
 
     await video.play();
 
-    console.log("Vídeo iniciado:", video.videoWidth, "x", video.videoHeight);
-
-    // -------------------------------------------------
-    // IMPORTANTE:
-    // agora que a câmera realmente está ativa,
-    // escondemos a mensagem.
-    // -------------------------------------------------
-
-    hideCameraMessage();
-
     cameraRunning = true;
 
-    processingFrame = false;
+    // ------------------------------------------------
+    // ESCONDE MENSAGEM
+    // ------------------------------------------------
+
+    if (cameraMessage) {
+      cameraMessage.style.display = "none";
+    }
 
     cameraStatus.textContent = "Câmera ativa — procurando mão";
 
@@ -409,40 +419,29 @@ async function startCameraFunction() {
 
     stopCameraButton.disabled = false;
 
-    // Configura o canvas
+    // ------------------------------------------------
+    // CANVAS
+    // ------------------------------------------------
+
     canvas.width = video.videoWidth;
 
     canvas.height = video.videoHeight;
 
-    console.log("Iniciando MediaPipe...");
+    processingFrame = false;
 
-    // Começa o processamento.
     processCamera();
   } catch (error) {
-    console.error("ERRO DA CÂMERA:", error);
+    console.error("Erro câmera:", error);
 
     cameraRunning = false;
 
     cameraStatus.textContent = "Erro ao acessar câmera";
 
-    showCameraMessage();
-
-    let explanation = "Não foi possível acessar a câmera.";
-
-    if (error.name === "NotAllowedError") {
-      explanation += "\n\nPermissão da câmera foi negada.";
-    } else if (error.name === "NotFoundError") {
-      explanation += "\n\nNenhuma câmera foi encontrada.";
-    } else if (error.name === "NotReadableError") {
-      explanation += "\n\nA câmera está sendo usada por outro aplicativo.";
-    } else if (
-      location.protocol !== "https:" &&
-      location.hostname !== "localhost"
-    ) {
-      explanation += "\n\nA câmera normalmente exige HTTPS.";
+    if (cameraMessage) {
+      cameraMessage.style.display = "flex";
     }
 
-    alert(explanation);
+    alert("Não foi possível acessar a câmera.\n\n" + error.message);
   }
 }
 
@@ -465,7 +464,9 @@ function stopCameraFunction() {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  showCameraMessage();
+  if (cameraMessage) {
+    cameraMessage.style.display = "flex";
+  }
 
   cameraStatus.textContent = "Câmera parada";
 
@@ -477,15 +478,12 @@ function stopCameraFunction() {
 
   stableFrames = 0;
 
-  // Ao desligar a câmera,
-  // o comando volta para zero.
+  // Estado seguro
   setCommand("00000");
-
-  console.log("Câmera parada.");
 }
 
 // =====================================================
-// LOOP DE PROCESSAMENTO
+// PROCESSAMENTO DA CÂMERA
 // =====================================================
 
 async function processCamera() {
@@ -493,8 +491,6 @@ async function processCamera() {
     return;
   }
 
-  // Evita enviar outro frame para o MediaPipe
-  // enquanto o anterior ainda está sendo processado.
   if (
     !processingFrame &&
     video.readyState >= 2 &&
@@ -520,7 +516,7 @@ async function processCamera() {
 }
 
 // =====================================================
-// DISTÂNCIA ENTRE PONTOS
+// DISTÂNCIA
 // =====================================================
 
 function distance(a, b) {
@@ -532,15 +528,16 @@ function distance(a, b) {
 }
 
 // =====================================================
-// DETECÇÃO DOS DEDOS
+// DETECTAR DEDOS
 // =====================================================
 //
-// Melhorada para funcionar mesmo quando a mão
-// estiver um pouco inclinada.
+// Ordem:
 //
-// Resultado:
-//
-// [polegar, indicador, médio, anelar, mínimo]
+// 0 = Polegar
+// 1 = Indicador
+// 2 = Médio
+// 3 = Anelar
+// 4 = Mínimo
 //
 // =====================================================
 
@@ -584,12 +581,6 @@ function detectFingers(landmarks) {
   // -------------------------------------------------
   // POLEGAR
   // -------------------------------------------------
-  //
-  // Para o polegar usamos distância da ponta
-  // em relação à palma.
-  //
-  // Isso é mais robusto que simplesmente comparar X.
-  // -------------------------------------------------
 
   const thumbTip = landmarks[4];
 
@@ -612,7 +603,7 @@ function detectFingers(landmarks) {
 }
 
 // =====================================================
-// BOOLEANOS → 5 BITS
+// DEDOS → 5 BITS
 // =====================================================
 
 function fingersToCommand(fingers) {
@@ -642,7 +633,7 @@ function processStableCommand(value) {
 }
 
 // =====================================================
-// MEDIAPIPE HANDS
+// MEDIAPIPE
 // =====================================================
 
 const hands = new Hands({
@@ -660,21 +651,19 @@ hands.setOptions({
 });
 
 // =====================================================
-// RESULTADO DA VISÃO COMPUTACIONAL
+// RESULTADOS MEDIAPIPE
 // =====================================================
 
 hands.onResults((results) => {
-  // -------------------------------------------------
-  // LIMPA DESENHO ANTERIOR
-  // -------------------------------------------------
+  // ------------------------------------------------
+  // LIMPA CANVAS
+  // ------------------------------------------------
 
-  if (canvas.width > 0 && canvas.height > 0) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // -------------------------------------------------
-  // NENHUMA MÃO
-  // -------------------------------------------------
+  // ------------------------------------------------
+  // SEM MÃO
+  // ------------------------------------------------
 
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
     cameraStatus.textContent = "Câmera ativa — mão não detectada";
@@ -682,64 +671,47 @@ hands.onResults((results) => {
     return;
   }
 
-  // -------------------------------------------------
-  // MÃO ENCONTRADA
-  // -------------------------------------------------
-
   cameraStatus.textContent = "Câmera ativa — mão detectada";
 
   const landmarks = results.multiHandLandmarks[0];
 
-  // -------------------------------------------------
-  // DESENHAR CONEXÕES
-  // -------------------------------------------------
+  // ------------------------------------------------
+  // DESENHAR MÃO
+  // ------------------------------------------------
 
   if (typeof drawConnectors === "function") {
     drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
       color: "#22c55e",
+
       lineWidth: 4,
     });
   }
 
-  // -------------------------------------------------
-  // DESENHAR PONTOS
-  // -------------------------------------------------
-
   if (typeof drawLandmarks === "function") {
     drawLandmarks(ctx, landmarks, {
       color: "#60a5fa",
+
       lineWidth: 2,
+
       radius: 5,
     });
   }
 
-  // -------------------------------------------------
-  // DETECTAR DEDOS
-  // -------------------------------------------------
+  // ------------------------------------------------
+  // DEDOS
+  // ------------------------------------------------
 
   const fingers = detectFingers(landmarks);
 
-  // -------------------------------------------------
-  // TRANSFORMAR EM 5 BITS
-  // -------------------------------------------------
+  const command = fingersToCommand(fingers);
 
-  const value = fingersToCommand(fingers);
-
-  console.log("DEDOS:", fingers, "COMANDO:", value);
-
-  // -------------------------------------------------
-  // EMERGÊNCIA
-  // -------------------------------------------------
+  console.log("Dedos:", fingers, "→", command);
 
   if (emergencyActive) {
     return;
   }
 
-  // -------------------------------------------------
-  // ESTABILIZAR
-  // -------------------------------------------------
-
-  processStableCommand(value);
+  processStableCommand(command);
 });
 
 // =====================================================
@@ -767,19 +739,18 @@ if (resetButton) {
 }
 
 // =====================================================
-// ESTADO INICIAL
+// INICIALIZAÇÃO
 // =====================================================
 
 setCommand("00000");
 
 setMqttStatus("desconectado", false);
 
-// =====================================================
-// INICIALIZAÇÃO
-// =====================================================
-
-console.log("Sistema de controle por gestos iniciado.");
+console.log("Sistema iniciado.");
 
 console.log("MediaPipe:", typeof Hands !== "undefined" ? "OK" : "ERRO");
 
-console.log("MQTT:", typeof mqtt !== "undefined" ? "OK" : "ERRO");
+console.log("MQTT.js:", typeof mqtt !== "undefined" ? "OK" : "ERRO");
+
+// Não conectamos automaticamente.
+// O usuário pode pressionar o botão MQTT.
