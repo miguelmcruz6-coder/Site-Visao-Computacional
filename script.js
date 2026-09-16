@@ -1,6 +1,6 @@
 // =====================================================
 // CONTROLE POR GESTOS
-// Visão computacional + MQTT + ESP32
+// CÂMERA + MEDIAPIPE HANDS + MQTT
 // =====================================================
 
 // =====================================================
@@ -9,8 +9,14 @@
 
 const MQTT_HOST = "broker.hivemq.com";
 
-// HiveMQ MQTT over WebSocket
-const MQTT_PORT = 8884;
+// ATENÇÃO:
+// Esta porta é para WebSocket.
+// Se o site estiver no GitHub Pages (HTTPS), o broker
+// público pode bloquear a conexão WS sem TLS.
+//
+// Para teste local, 8000 pode funcionar.
+// Para GitHub Pages, veja a observação no final.
+const MQTT_PORT = 8000;
 
 const MQTT_PATH = "/mqtt";
 
@@ -22,16 +28,14 @@ const MQTT_STOP_TOPIC = "automacao/maquina/emergencia";
 // CONFIGURAÇÕES
 // =====================================================
 
-// Envia o último comando a cada 250 ms.
-// O ESP32 possui timeout de 1000 ms.
 const MQTT_INTERVAL = 250;
 
-// Número de frames consecutivos necessários
-// para aceitar uma nova leitura.
-const STABILITY_FRAMES = 2;
+// Quantidade de leituras iguais necessárias
+// antes de aceitar uma nova posição.
+const STABILITY_FRAMES = 3;
 
 // =====================================================
-// ELEMENTOS HTML
+// ELEMENTOS
 // =====================================================
 
 const video = document.getElementById("video");
@@ -70,15 +74,17 @@ let cameraStream = null;
 
 let cameraRunning = false;
 
+let processingFrame = false;
+
 let emergencyActive = false;
 
-// Último comando confirmado
+// Comando atualmente utilizado
 let currentCommand = "00000";
 
-// Última leitura detectada
-let detectedCommand = "00000";
+// Último comando detectado
+let detectedCommand = "";
 
-// Quantidade de frames iguais
+// Número de frames iguais
 let stableFrames = 0;
 
 // =====================================================
@@ -86,6 +92,10 @@ let stableFrames = 0;
 // =====================================================
 
 function setMqttStatus(text, online) {
+  if (!mqttStatus) {
+    return;
+  }
+
   mqttStatus.textContent = "MQTT: " + text;
 
   mqttStatus.classList.remove("online", "offline");
@@ -94,7 +104,7 @@ function setMqttStatus(text, online) {
 }
 
 // =====================================================
-// MQTT - CONEXÃO
+// MQTT - CONECTAR
 // =====================================================
 
 function connectMQTT() {
@@ -105,103 +115,92 @@ function connectMQTT() {
   setMqttStatus("conectando...", false);
 
   const clientId =
-    "WEB_GESTOS_" + Date.now() + "_" + Math.random().toString(16).substring(2);
+    "WEB_GESTOS_" +
+    Date.now() +
+    "_" +
+    Math.random().toString(16).substring(2, 8);
 
-  const url = `wss://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
+  const url = `ws://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
 
-  console.log("Conectando ao:", url);
+  console.log("MQTT:", url);
 
-  mqttClient = mqtt.connect(url, {
-    clientId: clientId,
+  try {
+    mqttClient = mqtt.connect(url, {
+      clientId: clientId,
 
-    clean: true,
+      clean: true,
 
-    connectTimeout: 10000,
+      connectTimeout: 10000,
 
-    reconnectPeriod: 3000,
+      reconnectPeriod: 3000,
 
-    keepalive: 30,
-  });
+      keepalive: 30,
+    });
 
-  // -------------------------------------------------
-  // CONECTADO
-  // -------------------------------------------------
+    mqttClient.on("connect", () => {
+      console.log("MQTT conectado!");
 
-  mqttClient.on("connect", () => {
-    console.log("MQTT conectado!");
+      setMqttStatus("conectado", true);
 
-    setMqttStatus("conectado", true);
+      if (connectMqttButton) {
+        connectMqttButton.textContent = "✓ MQTT conectado";
+      }
+    });
 
-    connectMqttButton.textContent = "✓ MQTT conectado";
+    mqttClient.on("reconnect", () => {
+      console.log("MQTT reconectando...");
 
-    // Se estiver em emergência,
-    // não envia comando de dedos.
-    if (emergencyActive) {
-      publishEmergency();
-    }
-  });
+      setMqttStatus("reconectando...", false);
+    });
 
-  // -------------------------------------------------
-  // RECONEXÃO
-  // -------------------------------------------------
+    mqttClient.on("error", (error) => {
+      console.error("Erro MQTT:", error);
 
-  mqttClient.on("reconnect", () => {
-    console.log("Reconectando MQTT...");
+      setMqttStatus("erro", false);
+    });
 
-    setMqttStatus("reconectando...", false);
+    mqttClient.on("close", () => {
+      console.log("MQTT desconectado.");
 
-    connectMqttButton.textContent = "🔌 Reconectando...";
-  });
+      setMqttStatus("desconectado", false);
 
-  // -------------------------------------------------
-  // ERRO
-  // -------------------------------------------------
-
-  mqttClient.on("error", (error) => {
-    console.error("Erro MQTT:", error);
+      if (connectMqttButton) {
+        connectMqttButton.textContent = "🔌 Conectar MQTT";
+      }
+    });
+  } catch (error) {
+    console.error("Falha ao criar conexão MQTT:", error);
 
     setMqttStatus("erro", false);
-  });
-
-  // -------------------------------------------------
-  // DESCONECTADO
-  // -------------------------------------------------
-
-  mqttClient.on("close", () => {
-    console.log("MQTT desconectado.");
-
-    setMqttStatus("desconectado", false);
-
-    connectMqttButton.textContent = "🔌 Conectar MQTT";
-  });
+  }
 }
 
 // =====================================================
-// MQTT - PUBLICAR
+// MQTT - PUBLICAR COMANDO
 // =====================================================
 
-function publishCommand(command) {
+function publishCommand(value) {
   if (!mqttClient || !mqttClient.connected) {
     return;
   }
 
-  mqttClient.publish(MQTT_TOPIC, command, {
+  mqttClient.publish(MQTT_TOPIC, value, {
     qos: 0,
     retain: false,
   });
 
-  console.log("MQTT →", MQTT_TOPIC, command);
+  console.log("MQTT →", value);
 }
 
 // =====================================================
 // ENVIO PERIÓDICO
 // =====================================================
 //
-// O ESP32 desliga as saídas depois de 1000 ms
-// sem receber mensagem.
+// O ESP32 possui:
 //
-// Portanto enviamos a cada 250 ms.
+// TIMEOUT_MQTT = 1000 ms
 //
+// Por isso enviamos a cada 250 ms.
 // =====================================================
 
 setInterval(() => {
@@ -222,7 +221,7 @@ setInterval(() => {
 
 function publishEmergency() {
   if (!mqttClient || !mqttClient.connected) {
-    alert("Conecte ao MQTT antes de ativar a emergência.");
+    alert("Conecte ao MQTT primeiro.");
 
     return;
   }
@@ -234,23 +233,18 @@ function publishEmergency() {
 
   emergencyActive = true;
 
-  // Mostra tudo desligado
   setCommand("00000");
 
-  console.log("!!!!!!!!!!!!!!!!!!!!!!!!");
-
   console.log("EMERGÊNCIA → STOP");
-
-  console.log("!!!!!!!!!!!!!!!!!!!!!!!!");
 }
 
 // =====================================================
-// RESET EMERGÊNCIA
+// RESET
 // =====================================================
 
 function resetEmergency() {
   if (!mqttClient || !mqttClient.connected) {
-    alert("Conecte ao MQTT antes de resetar a emergência.");
+    alert("Conecte ao MQTT primeiro.");
 
     return;
   }
@@ -262,29 +256,30 @@ function resetEmergency() {
 
   emergencyActive = false;
 
-  // Mantém tudo desligado até a próxima
-  // detecção válida da mão.
   setCommand("00000");
 
-  console.log("Emergência resetada.");
+  console.log("EMERGÊNCIA → RESET");
 }
 
 // =====================================================
-// INTERFACE - COMANDO
+// ATUALIZA INTERFACE
 // =====================================================
 
 function setCommand(value) {
-  if (!/^[01]{5}$/.test(value)) {
+  if (typeof value !== "string" || !/^[01]{5}$/.test(value)) {
     return;
   }
 
   currentCommand = value;
 
-  commandElement.textContent = value;
+  if (commandElement) {
+    commandElement.textContent = value;
+  }
 
-  messageElement.textContent = value;
+  if (messageElement) {
+    messageElement.textContent = value;
+  }
 
-  // Atualiza os cinco indicadores
   for (let i = 0; i < 5; i++) {
     const light = document.getElementById(`finger${i}`);
 
@@ -305,12 +300,52 @@ function setCommand(value) {
 }
 
 // =====================================================
-// CÂMERA
+// ESCONDER MENSAGEM DA CÂMERA
+// =====================================================
+
+function hideCameraMessage() {
+  if (!cameraMessage) {
+    return;
+  }
+
+  // Primeiro removemos qualquer display
+  // definido pelo CSS.
+  cameraMessage.style.display = "none";
+
+  cameraMessage.style.visibility = "hidden";
+
+  cameraMessage.style.opacity = "0";
+}
+
+// =====================================================
+// MOSTRAR MENSAGEM DA CÂMERA
+// =====================================================
+
+function showCameraMessage() {
+  if (!cameraMessage) {
+    return;
+  }
+
+  cameraMessage.style.display = "flex";
+
+  cameraMessage.style.visibility = "visible";
+
+  cameraMessage.style.opacity = "1";
+}
+
+// =====================================================
+// INICIAR CÂMERA
 // =====================================================
 
 async function startCameraFunction() {
   try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("getUserMedia não está disponível.");
+    }
+
     cameraStatus.textContent = "Solicitando câmera...";
+
+    console.log("Solicitando acesso à câmera...");
 
     cameraStream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -325,41 +360,89 @@ async function startCameraFunction() {
         height: {
           ideal: 720,
         },
+
+        frameRate: {
+          ideal: 30,
+        },
       },
 
       audio: false,
     });
 
+    console.log("Permissão da câmera concedida.");
+
     video.srcObject = cameraStream;
+
+    // Espera o navegador realmente carregar
+    // as dimensões do vídeo.
+    await new Promise((resolve) => {
+      if (video.readyState >= 2) {
+        resolve();
+
+        return;
+      }
+
+      video.onloadedmetadata = () => {
+        resolve();
+      };
+    });
 
     await video.play();
 
+    console.log("Vídeo iniciado:", video.videoWidth, "x", video.videoHeight);
+
+    // -------------------------------------------------
+    // IMPORTANTE:
+    // agora que a câmera realmente está ativa,
+    // escondemos a mensagem.
+    // -------------------------------------------------
+
+    hideCameraMessage();
+
     cameraRunning = true;
 
-    cameraStatus.textContent = "Câmera ativa";
+    processingFrame = false;
 
-    cameraMessage.style.display = "none";
+    cameraStatus.textContent = "Câmera ativa — procurando mão";
 
     startCameraButton.disabled = true;
 
     stopCameraButton.disabled = false;
 
-    console.log("Câmera iniciada.");
+    // Configura o canvas
+    canvas.width = video.videoWidth;
 
-    // Inicia o processamento
+    canvas.height = video.videoHeight;
+
+    console.log("Iniciando MediaPipe...");
+
+    // Começa o processamento.
     processCamera();
   } catch (error) {
-    console.error("Erro ao acessar câmera:", error);
+    console.error("ERRO DA CÂMERA:", error);
 
-    cameraStatus.textContent = "Erro na câmera";
+    cameraRunning = false;
 
-    cameraMessage.style.display = "flex";
+    cameraStatus.textContent = "Erro ao acessar câmera";
 
-    alert(
-      "Não foi possível acessar a câmera.\n\n" +
-        "Verifique se o navegador possui permissão " +
-        "para utilizar a câmera."
-    );
+    showCameraMessage();
+
+    let explanation = "Não foi possível acessar a câmera.";
+
+    if (error.name === "NotAllowedError") {
+      explanation += "\n\nPermissão da câmera foi negada.";
+    } else if (error.name === "NotFoundError") {
+      explanation += "\n\nNenhuma câmera foi encontrada.";
+    } else if (error.name === "NotReadableError") {
+      explanation += "\n\nA câmera está sendo usada por outro aplicativo.";
+    } else if (
+      location.protocol !== "https:" &&
+      location.hostname !== "localhost"
+    ) {
+      explanation += "\n\nA câmera normalmente exige HTTPS.";
+    }
+
+    alert(explanation);
   }
 }
 
@@ -376,27 +459,33 @@ function stopCameraFunction() {
     cameraStream = null;
   }
 
+  video.pause();
+
   video.srcObject = null;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  cameraStatus.textContent = "Câmera parada";
+  showCameraMessage();
 
-  cameraMessage.style.display = "flex";
+  cameraStatus.textContent = "Câmera parada";
 
   startCameraButton.disabled = false;
 
   stopCameraButton.disabled = true;
 
-  // Segurança:
-  // ao parar a câmera, zeramos o comando.
+  detectedCommand = "";
+
+  stableFrames = 0;
+
+  // Ao desligar a câmera,
+  // o comando volta para zero.
   setCommand("00000");
 
   console.log("Câmera parada.");
 }
 
 // =====================================================
-// PROCESSAMENTO DA CÂMERA
+// LOOP DE PROCESSAMENTO
 // =====================================================
 
 async function processCamera() {
@@ -404,17 +493,24 @@ async function processCamera() {
     return;
   }
 
-  if (video.readyState >= 2) {
-    canvas.width = video.videoWidth;
-
-    canvas.height = video.videoHeight;
+  // Evita enviar outro frame para o MediaPipe
+  // enquanto o anterior ainda está sendo processado.
+  if (
+    !processingFrame &&
+    video.readyState >= 2 &&
+    video.videoWidth > 0 &&
+    video.videoHeight > 0
+  ) {
+    processingFrame = true;
 
     try {
       await hands.send({
         image: video,
       });
     } catch (error) {
-      console.error("Erro no MediaPipe:", error);
+      console.error("Erro MediaPipe:", error);
+    } finally {
+      processingFrame = false;
     }
   }
 
@@ -424,42 +520,8 @@ async function processCamera() {
 }
 
 // =====================================================
-// DETECÇÃO DOS DEDOS
+// DISTÂNCIA ENTRE PONTOS
 // =====================================================
-//
-// MediaPipe fornece 21 pontos:
-//
-// 0  = punho
-// 1  = base do polegar
-// 2  = polegar
-// 3  = polegar
-// 4  = ponta do polegar
-//
-// 5  = base indicador
-// 6  = articulação
-// 7  = articulação
-// 8  = ponta indicador
-//
-// 9  = base médio
-// 10 = articulação
-// 11 = articulação
-// 12 = ponta médio
-//
-// 13 = base anelar
-// 14 = articulação
-// 15 = articulação
-// 16 = ponta anelar
-//
-// 17 = base mínimo
-// 18 = articulação
-// 19 = articulação
-// 20 = ponta mínimo
-//
-// =====================================================
-
-// -----------------------------------------------------
-// DISTÂNCIA ENTRE DOIS PONTOS
-// -----------------------------------------------------
 
 function distance(a, b) {
   const dx = a.x - b.x;
@@ -469,78 +531,88 @@ function distance(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-// -----------------------------------------------------
-// DETECTAR DEDOS
-// -----------------------------------------------------
+// =====================================================
+// DETECÇÃO DOS DEDOS
+// =====================================================
+//
+// Melhorada para funcionar mesmo quando a mão
+// estiver um pouco inclinada.
+//
+// Resultado:
+//
+// [polegar, indicador, médio, anelar, mínimo]
+//
+// =====================================================
 
-function detectFingers(landmarks, handedness) {
+function detectFingers(landmarks) {
+  const wrist = landmarks[0];
+
+  const palm = distance(landmarks[0], landmarks[9]);
+
   // -------------------------------------------------
-  // DEDOS VERTICAIS
-  // -------------------------------------------------
-  //
-  // Para indicador, médio, anelar e mínimo,
-  // comparamos a ponta com a articulação PIP.
-  //
-  // Como Y cresce para baixo:
-  //
-  // ponta.y < articulação.y
-  //
-  // significa dedo levantado.
+  // INDICADOR
   // -------------------------------------------------
 
-  const indicador = landmarks[8].y < landmarks[6].y;
+  const indicador =
+    landmarks[8].y < landmarks[6].y &&
+    distance(landmarks[8], wrist) > distance(landmarks[6], wrist) * 1.05;
 
-  const medio = landmarks[12].y < landmarks[10].y;
+  // -------------------------------------------------
+  // MÉDIO
+  // -------------------------------------------------
 
-  const anelar = landmarks[16].y < landmarks[14].y;
+  const medio =
+    landmarks[12].y < landmarks[10].y &&
+    distance(landmarks[12], wrist) > distance(landmarks[10], wrist) * 1.05;
 
-  const minimo = landmarks[20].y < landmarks[18].y;
+  // -------------------------------------------------
+  // ANELAR
+  // -------------------------------------------------
+
+  const anelar =
+    landmarks[16].y < landmarks[14].y &&
+    distance(landmarks[16], wrist) > distance(landmarks[14], wrist) * 1.05;
+
+  // -------------------------------------------------
+  // MÍNIMO
+  // -------------------------------------------------
+
+  const minimo =
+    landmarks[20].y < landmarks[18].y &&
+    distance(landmarks[20], wrist) > distance(landmarks[18], wrist) * 1.03;
 
   // -------------------------------------------------
   // POLEGAR
   // -------------------------------------------------
   //
-  // O polegar é melhor analisado pela distância
-  // entre a ponta e a palma.
+  // Para o polegar usamos distância da ponta
+  // em relação à palma.
   //
-  // Também usamos a direção horizontal.
-  //
-  // Isso permite trabalhar com mão esquerda/direita.
+  // Isso é mais robusto que simplesmente comparar X.
   // -------------------------------------------------
 
   const thumbTip = landmarks[4];
 
   const thumbIP = landmarks[3];
 
-  const indexBase = landmarks[5];
+  const thumbMCP = landmarks[2];
 
-  const thumbDistance = distance(thumbTip, indexBase);
+  const thumbTipDistance = distance(thumbTip, wrist);
 
-  const palmSize = distance(landmarks[0], landmarks[9]);
+  const thumbIPDistance = distance(thumbIP, wrist);
 
-  // Evita considerar o polegar levantado
-  // quando ele está muito próximo da palma.
+  const thumbMCPDistance = distance(thumbMCP, wrist);
 
-  const thumbExtended = thumbDistance > palmSize * 0.75;
+  const thumb =
+    thumbTipDistance > thumbIPDistance * 1.08 &&
+    thumbTipDistance > thumbMCPDistance * 1.25 &&
+    distance(thumbTip, landmarks[5]) > palm * 0.65;
 
-  // -------------------------------------------------
-  // RESULTADO
-  // -------------------------------------------------
-  //
-  // Ordem EXATA esperada pelo ESP32:
-  //
-  // [0] Polegar
-  // [1] Indicador
-  // [2] Médio
-  // [3] Anelar
-  // [4] Mínimo
-  // -------------------------------------------------
-
-  return [thumbExtended, indicador, medio, anelar, minimo];
+  return [thumb, indicador, medio, anelar, minimo];
 }
 
 // =====================================================
-// TRANSFORMAR BOOLEANOS EM 5 BITS
+// BOOLEANOS → 5 BITS
 // =====================================================
 
 function fingersToCommand(fingers) {
@@ -550,30 +622,27 @@ function fingersToCommand(fingers) {
 // =====================================================
 // ESTABILIZAÇÃO
 // =====================================================
-//
-// Evita que pequenas oscilações da visão computacional
-// façam o comando ficar alternando rapidamente.
-//
-// =====================================================
 
-function processStableCommand(command) {
-  if (command === detectedCommand) {
+function processStableCommand(value) {
+  if (value === detectedCommand) {
     stableFrames++;
   } else {
-    detectedCommand = command;
+    detectedCommand = value;
 
     stableFrames = 1;
   }
 
-  if (stableFrames >= STABILITY_FRAMES && command !== currentCommand) {
-    setCommand(command);
+  if (stableFrames >= STABILITY_FRAMES) {
+    if (value !== currentCommand) {
+      setCommand(value);
 
-    console.log("Novo comando:", command);
+      console.log("Novo comando:", value);
+    }
   }
 }
 
 // =====================================================
-// RESULTADOS DO MEDIAPIPE
+// MEDIAPIPE HANDS
 // =====================================================
 
 const hands = new Hands({
@@ -585,44 +654,45 @@ hands.setOptions({
 
   modelComplexity: 1,
 
-  minDetectionConfidence: 0.65,
+  minDetectionConfidence: 0.6,
 
-  minTrackingConfidence: 0.65,
+  minTrackingConfidence: 0.6,
 });
 
-hands.onResults((results) => {
-  // ------------------------------------------------
-  // LIMPA CANVAS
-  // ------------------------------------------------
+// =====================================================
+// RESULTADO DA VISÃO COMPUTACIONAL
+// =====================================================
 
-  if (canvas.width && canvas.height) {
+hands.onResults((results) => {
+  // -------------------------------------------------
+  // LIMPA DESENHO ANTERIOR
+  // -------------------------------------------------
+
+  if (canvas.width > 0 && canvas.height > 0) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  // ------------------------------------------------
+  // -------------------------------------------------
   // NENHUMA MÃO
-  // ------------------------------------------------
+  // -------------------------------------------------
 
   if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
     cameraStatus.textContent = "Câmera ativa — mão não detectada";
 
-    // Não desligamos imediatamente.
-    // O último comando continua sendo enviado
-    // pelo intervalo MQTT.
     return;
   }
 
-  cameraStatus.textContent = "Câmera ativa — mão detectada";
+  // -------------------------------------------------
+  // MÃO ENCONTRADA
+  // -------------------------------------------------
 
-  // ------------------------------------------------
-  // PRIMEIRA MÃO
-  // ------------------------------------------------
+  cameraStatus.textContent = "Câmera ativa — mão detectada";
 
   const landmarks = results.multiHandLandmarks[0];
 
-  // ------------------------------------------------
+  // -------------------------------------------------
   // DESENHAR CONEXÕES
-  // ------------------------------------------------
+  // -------------------------------------------------
 
   if (typeof drawConnectors === "function") {
     drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
@@ -631,9 +701,9 @@ hands.onResults((results) => {
     });
   }
 
-  // ------------------------------------------------
+  // -------------------------------------------------
   // DESENHAR PONTOS
-  // ------------------------------------------------
+  // -------------------------------------------------
 
   if (typeof drawLandmarks === "function") {
     drawLandmarks(ctx, landmarks, {
@@ -643,58 +713,58 @@ hands.onResults((results) => {
     });
   }
 
-  // ------------------------------------------------
-  // IDENTIFICAR MÃO
-  // ------------------------------------------------
-
-  let handedness = null;
-
-  if (results.multiHandedness && results.multiHandedness.length > 0) {
-    handedness = results.multiHandedness[0].label;
-  }
-
-  // ------------------------------------------------
+  // -------------------------------------------------
   // DETECTAR DEDOS
-  // ------------------------------------------------
+  // -------------------------------------------------
 
-  const fingers = detectFingers(landmarks, handedness);
+  const fingers = detectFingers(landmarks);
 
-  // ------------------------------------------------
-  // CONVERTER PARA 5 BITS
-  // ------------------------------------------------
+  // -------------------------------------------------
+  // TRANSFORMAR EM 5 BITS
+  // -------------------------------------------------
 
-  const command = fingersToCommand(fingers);
+  const value = fingersToCommand(fingers);
 
-  console.log("Mão:", handedness, "Dedos:", fingers, "Comando:", command);
+  console.log("DEDOS:", fingers, "COMANDO:", value);
 
-  // ------------------------------------------------
+  // -------------------------------------------------
   // EMERGÊNCIA
-  // ------------------------------------------------
+  // -------------------------------------------------
 
   if (emergencyActive) {
     return;
   }
 
-  // ------------------------------------------------
+  // -------------------------------------------------
   // ESTABILIZAR
-  // ------------------------------------------------
+  // -------------------------------------------------
 
-  processStableCommand(command);
+  processStableCommand(value);
 });
 
 // =====================================================
-// EVENTOS
+// BOTÕES
 // =====================================================
 
-startCameraButton.addEventListener("click", startCameraFunction);
+if (startCameraButton) {
+  startCameraButton.addEventListener("click", startCameraFunction);
+}
 
-stopCameraButton.addEventListener("click", stopCameraFunction);
+if (stopCameraButton) {
+  stopCameraButton.addEventListener("click", stopCameraFunction);
+}
 
-connectMqttButton.addEventListener("click", connectMQTT);
+if (connectMqttButton) {
+  connectMqttButton.addEventListener("click", connectMQTT);
+}
 
-emergencyButton.addEventListener("click", publishEmergency);
+if (emergencyButton) {
+  emergencyButton.addEventListener("click", publishEmergency);
+}
 
-resetButton.addEventListener("click", resetEmergency);
+if (resetButton) {
+  resetButton.addEventListener("click", resetEmergency);
+}
 
 // =====================================================
 // ESTADO INICIAL
@@ -705,12 +775,11 @@ setCommand("00000");
 setMqttStatus("desconectado", false);
 
 // =====================================================
-// CONECTA MQTT AUTOMATICAMENTE
-// =====================================================
-//
-// O botão continua disponível, mas tentamos conectar
-// automaticamente quando a página é aberta.
-//
+// INICIALIZAÇÃO
 // =====================================================
 
-connectMQTT();
+console.log("Sistema de controle por gestos iniciado.");
+
+console.log("MediaPipe:", typeof Hands !== "undefined" ? "OK" : "ERRO");
+
+console.log("MQTT:", typeof mqtt !== "undefined" ? "OK" : "ERRO");
