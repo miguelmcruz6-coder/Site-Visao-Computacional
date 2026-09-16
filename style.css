@@ -1,0 +1,411 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --background: #070b14;
+  --card: #111827;
+  --card-light: #172033;
+  --border: #263449;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --blue: #3b82f6;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #eab308;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #172554 0%, #070b14 50%);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+/* =====================================================
+ HEADER
+===================================================== */
+
+.header {
+  width: 100%;
+  max-width: 1100px;
+  margin: auto;
+  padding: 25px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.header h1 {
+  font-size: clamp(25px, 5vw, 38px);
+}
+
+.header p {
+  color: var(--muted);
+  margin-top: 5px;
+}
+
+/* =====================================================
+ STATUS
+===================================================== */
+
+.status {
+  padding: 9px 15px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.status.offline {
+  color: #fecaca;
+  background: #450a0a;
+}
+
+.status.online {
+  color: #bbf7d0;
+  background: #14532d;
+}
+
+/* =====================================================
+ MAIN
+===================================================== */
+
+main {
+  width: 100%;
+  max-width: 1100px;
+  margin: auto;
+  padding: 0 20px 40px;
+  display: grid;
+  gap: 20px;
+}
+
+/* =====================================================
+ CARD
+===================================================== */
+
+.card {
+  background: rgba(17, 24, 39, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+
+.card h2 {
+  font-size: 20px;
+  margin-bottom: 16px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.card-header > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* =====================================================
+ CAMERA
+===================================================== */
+
+.camera-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: #020617;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+}
+
+#video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(-1);
+  pointer-events: none;
+}
+
+#cameraOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(2, 6, 23, 0.55);
+  color: var(--muted);
+}
+
+/* =====================================================
+ BUTTONS
+===================================================== */
+
+.button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+button {
+  border: none;
+  border-radius: 10px;
+  padding: 12px 18px;
+  background: var(--blue);
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+button.secondary {
+  background: #334155;
+}
+
+button.danger {
+  background: var(--red);
+}
+
+button.danger:hover {
+  background: #dc2626;
+}
+
+/* =====================================================
+ FINGERS
+===================================================== */
+
+.fingers {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+
+.finger {
+  min-height: 145px;
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  text-align: center;
+  background: var(--card-light);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.finger strong {
+  font-size: 15px;
+}
+
+.finger span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finger small {
+  color: #60a5fa;
+  font-family: monospace;
+}
+
+/* =====================================================
+ LED
+===================================================== */
+
+.light {
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: #334155;
+  margin-bottom: 5px;
+  transition: 0.15s;
+}
+
+.light.on {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green), 0 0 25px rgba(34, 197, 94, 0.45);
+}
+
+/* =====================================================
+ COMMAND
+===================================================== */
+
+#commandDisplay {
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #020617;
+  border: 1px solid var(--border);
+  color: #60a5fa;
+  font-family: monospace;
+  font-size: 18px;
+}
+
+.command {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  border-radius: 14px;
+  background: #020617;
+  border: 1px solid var(--border);
+}
+
+.command span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#mqttCommand {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 42px;
+  letter-spacing: 8px;
+  color: var(--green);
+}
+
+/* =====================================================
+ MQTT INFO
+===================================================== */
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.info-grid div {
+  padding: 14px;
+  background: var(--card-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.info-grid label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.info-grid strong {
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+/* =====================================================
+ EXPLICAÇÃO
+===================================================== */
+
+.card p {
+  color: #cbd5e1;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+.card ul {
+  padding-left: 20px;
+  color: #cbd5e1;
+  line-height: 1.9;
+}
+
+.example {
+  display: inline-block;
+  padding: 10px 18px;
+  margin-bottom: 15px;
+  border-radius: 8px;
+  background: #020617;
+  color: #60a5fa;
+  font-family: monospace;
+  font-size: 25px;
+  letter-spacing: 4px;
+}
+
+.privacy {
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 10px;
+  background: #052e16;
+  color: #bbf7d0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* =====================================================
+ FOOTER
+===================================================== */
+
+footer {
+  padding: 25px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* =====================================================
+ MOBILE
+===================================================== */
+
+@media (max-width: 750px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .fingers {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .button-group button {
+    width: 100%;
+  }
+
+  #mqttCommand {
+    font-size: 32px;
+    letter-spacing: 5px;
+  }
+}
+
+@media (max-width: 420px) {
+  .fingers {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .finger {
+    min-height: 120px;
+  }
+}

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <meta
+      name="description"
+      content="Projeto educacional de visão computacional com controle MQTT por gestos."
+    />
+
+    <title>Controle por Gestos</title>
+
+    <link rel="stylesheet" href="style.css" />
+
+    <!-- MQTT.js -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+    <!-- MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  </head>
+
+  <body>
+    <header class="header">
+      <div>
+        <h1>Controle por Gestos</h1>
+
+        <p>Visão computacional + MQTT + ESP32</p>
+      </div>
+
+      <div id="mqttStatus" class="status offline">MQTT desconectado</div>
+    </header>
+
+    <main>
+      <!-- =================================================
+         CÂMERA
+    ================================================== -->
+
+      <section class="card">
+        <div class="card-header">
+          <h2>Câmera</h2>
+
+          <span id="cameraStatus"> Câmera parada </span>
+        </div>
+
+        <div class="camera-container">
+          <video id="video" autoplay playsinline muted></video>
+
+          <canvas id="canvas"></canvas>
+
+          <div id="cameraOverlay">Pressione "Iniciar câmera"</div>
+        </div>
+
+        <div class="button-group">
+          <button id="startCamera">📷 Iniciar câmera</button>
+
+          <button id="stopCamera" class="secondary" disabled>
+            ⏹ Parar câmera
+          </button>
+        </div>
+      </section>
+
+      <!-- =================================================
+         DEDOS
+    ================================================== -->
+
+      <section class="card">
+        <div class="card-header">
+          <h2>Dedos detectados</h2>
+
+          <div id="commandDisplay">00000</div>
+        </div>
+
+        <div class="fingers">
+          <div class="finger">
+            <div id="light0" class="light"></div>
+
+            <strong>Polegar</strong>
+
+            <span>Esteira</span>
+
+            <small>[0]</small>
+          </div>
+
+          <div class="finger">
+            <div id="light1" class="light"></div>
+
+            <strong>Indicador</strong>
+
+            <span>Garra</span>
+
+            <small>[1]</small>
+          </div>
+
+          <div class="finger">
+            <div id="light2" class="light"></div>
+
+            <strong>Médio</strong>
+
+            <span>Seletor</span>
+
+            <small>[2]</small>
+          </div>
+
+          <div class="finger">
+            <div id="light3" class="light"></div>
+
+            <strong>Anelar</strong>
+
+            <span>Inspecionador</span>
+
+            <small>[3]</small>
+          </div>
+
+          <div class="finger">
+            <div id="light4" class="light"></div>
+
+            <strong>Mínimo</strong>
+
+            <span>Trava</span>
+
+            <small>[4]</small>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================
+         MQTT
+    ================================================== -->
+
+      <section class="card">
+        <h2>Comunicação MQTT</h2>
+
+        <div class="info-grid">
+          <div>
+            <label>Broker</label>
+
+            <strong> broker.hivemq.com </strong>
+          </div>
+
+          <div>
+            <label>Tópico</label>
+
+            <strong> automacao/maquina/dedos </strong>
+          </div>
+
+          <div>
+            <label>Emergência</label>
+
+            <strong> automacao/maquina/emergencia </strong>
+          </div>
+        </div>
+
+        <div class="command">
+          <span>Comando enviado</span>
+
+          <strong id="mqttCommand"> 00000 </strong>
+        </div>
+
+        <div class="button-group">
+          <button id="connectMqtt">🔌 Conectar MQTT</button>
+
+          <button id="emergency" class="danger">🛑 EMERGÊNCIA</button>
+
+          <button id="resetEmergency" class="secondary">
+            ↻ Reset emergência
+          </button>
+        </div>
+      </section>
+
+      <!-- =================================================
+         INFORMAÇÕES
+    ================================================== -->
+
+      <section class="card">
+        <h2>Como funciona</h2>
+
+        <p>
+          A câmera do celular é processada localmente pelo navegador utilizando
+          visão computacional.
+        </p>
+
+        <p>
+          Cada dedo levantado corresponde ao valor
+          <strong>1</strong>. Um dedo abaixado corresponde ao valor
+          <strong>0</strong>.
+        </p>
+
+        <div class="example">10101</div>
+
+        <ul>
+          <li>Polegar → Esteira</li>
+
+          <li>Indicador → Garra</li>
+
+          <li>Médio → Seletor</li>
+
+          <li>Anelar → Inspecionador</li>
+
+          <li>Mínimo → Trava</li>
+        </ul>
+
+        <div class="privacy">
+          🔒 O vídeo da câmera é processado localmente no navegador. O vídeo não
+          é enviado ao HiveMQ.
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      Projeto educacional<br />
+
+      Visão Computacional + MQTT + ESP32
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
