@@ -6,44 +6,16 @@
 // =====================================================
 // CONFIGURAÇÃO HIVEMQ CLOUD
 // =====================================================
-//
-// Pegue esses dados no:
-//
-// HiveMQ Cloud
-// → seu Cluster
-// → Overview
-// → Connection Details
-//
-// =====================================================
 
-const MQTT_HOST = "9927a23299b84ac78820c07e11c8d448.s1.eu.hivemq.cloud";
-
-const MQTT_PORT = 8884;
-
-const MQTT_PATH = "/mqtt";
-
-// -----------------------------------------------------
-// CREDENCIAIS
-// -----------------------------------------------------
-//
-// Crie uma credencial específica para o WEB no HiveMQ.
-//
-// NÃO coloque uma credencial administrativa aqui.
-// NÃO use a mesma credencial do ESP32 se o GitHub
-// for público.
-// -----------------------------------------------------
-
-const MQTT_USERNAME = "hivemq.webclient.1789562292116";
-
-const MQTT_PASSWORD = "jpFACDmz$jXzrHghKwz6ftrHACRxOow%";
-
-// =====================================================
-// TÓPICOS
-// =====================================================
-
-const MQTT_TOPIC = "automacao/maquina/dedos";
-
-const MQTT_STOP_TOPIC = "automacao/maquina/emergencia";
+import {
+  MQTT_HOST,
+  MQTT_PORT,
+  MQTT_PATH,
+  MQTT_USERNAME,
+  MQTT_PASSWORD,
+  MQTT_TOPIC,
+  MQTT_STOP_TOPIC,
+} from "./Data/mqttConfig";
 
 // =====================================================
 // CONFIGURAÇÕES
@@ -92,6 +64,24 @@ const commandElement = document.getElementById("command");
 const messageElement = document.getElementById("message");
 
 // =====================================================
+// ELEMENTOS DO INTERTRAVAMENTO
+// =====================================================
+
+const interlockStatus = document.getElementById("interlockStatus");
+
+const interlockProgress = document.getElementById("interlockProgress");
+
+const interlockCountdown = document.getElementById("interlockCountdown");
+
+const gripperState = document.getElementById("gripperState");
+
+const inspectorState = document.getElementById("inspectorState");
+
+const gripperStateText = document.getElementById("gripperStateText");
+
+const inspectorStateText = document.getElementById("inspectorStateText");
+
+// =====================================================
 // ESTADO
 // =====================================================
 
@@ -118,6 +108,253 @@ let currentCommand = "00000";
 let detectedCommand = "";
 
 let stableFrames = 0;
+
+// =====================================================
+// INTERTRAVAMENTO VISUAL
+// =====================================================
+//
+// Garra:
+// posição 1 do comando
+//
+// Inspecionador:
+// posição 3 do comando
+//
+// Tempo:
+// 2 segundos
+//
+// IMPORTANTE:
+// Este código serve para INDICAR visualmente o intervalo.
+// A regra real de segurança continua sendo aplicada
+// pelo ESP32.
+// =====================================================
+
+const INTERLOCK_TIME = 2000;
+
+let lastGripperState = false;
+
+let lastInspectorState = false;
+
+let gripperOffTime = 0;
+
+let inspectorOffTime = 0;
+
+// =====================================================
+// ATUALIZAR INTERTRAVAMENTO VISUAL
+// =====================================================
+
+function atualizarIntertravamentoUI(garra, inspecionador) {
+  const agora = Date.now();
+
+  // ===================================================
+  // DETECTAR DESLIGAMENTO DA GARRA
+  // ===================================================
+
+  if (lastGripperState === true && garra === false) {
+    gripperOffTime = agora;
+  }
+
+  // ===================================================
+  // DETECTAR DESLIGAMENTO DO INSPECIONADOR
+  // ===================================================
+
+  if (lastInspectorState === true && inspecionador === false) {
+    inspectorOffTime = agora;
+  }
+
+  // ===================================================
+  // ESTADO VISUAL DA GARRA
+  // ===================================================
+
+  if (gripperState) {
+    gripperState.classList.toggle("active-gripper", garra);
+  }
+
+  if (gripperStateText) {
+    gripperStateText.textContent = garra ? "🟢 Ativa" : "Desligada";
+  }
+
+  // ===================================================
+  // ESTADO VISUAL DO INSPECIONADOR
+  // ===================================================
+
+  if (inspectorState) {
+    inspectorState.classList.toggle("active-inspector", inspecionador);
+  }
+
+  if (inspectorStateText) {
+    inspectorStateText.textContent = inspecionador ? "🟢 Ativo" : "Desligado";
+  }
+
+  // ===================================================
+  // GARRA ATIVA
+  // ===================================================
+
+  if (garra && !inspecionador) {
+    if (interlockStatus) {
+      interlockStatus.className = "interlock-status gripper";
+
+      interlockStatus.textContent = "● Garra ativa";
+    }
+
+    if (interlockProgress) {
+      interlockProgress.style.width = "100%";
+    }
+
+    if (interlockCountdown) {
+      interlockCountdown.className = "interlock-countdown";
+
+      interlockCountdown.textContent = "Garra ativa — Inspecionador bloqueado.";
+    }
+  }
+
+  // ===================================================
+  // INSPECIONADOR ATIVO
+  // ===================================================
+  else if (!garra && inspecionador) {
+    if (interlockStatus) {
+      interlockStatus.className = "interlock-status inspector";
+
+      interlockStatus.textContent = "● Inspecionador ativo";
+    }
+
+    if (interlockProgress) {
+      interlockProgress.style.width = "100%";
+    }
+
+    if (interlockCountdown) {
+      interlockCountdown.className = "interlock-countdown";
+
+      interlockCountdown.textContent = "Inspecionador ativo — Garra bloqueada.";
+    }
+  }
+
+  // ===================================================
+  // AMBOS DESLIGADOS
+  // ===================================================
+  else if (!garra && !inspecionador) {
+    const tempoDesdeGarra =
+      gripperOffTime > 0 ? agora - gripperOffTime : INTERLOCK_TIME;
+
+    const tempoDesdeInspecionador =
+      inspectorOffTime > 0 ? agora - inspectorOffTime : INTERLOCK_TIME;
+
+    // ===============================================
+    // GAP APÓS DESLIGAR A GARRA
+    // ===============================================
+
+    if (gripperOffTime > 0 && tempoDesdeGarra < INTERLOCK_TIME) {
+      const restante = INTERLOCK_TIME - tempoDesdeGarra;
+
+      const progresso = (tempoDesdeGarra / INTERLOCK_TIME) * 100;
+
+      if (interlockStatus) {
+        interlockStatus.className = "interlock-status waiting";
+
+        interlockStatus.textContent = "● Intervalo de segurança";
+      }
+
+      if (interlockProgress) {
+        interlockProgress.style.width = `${progresso}%`;
+      }
+
+      if (interlockCountdown) {
+        interlockCountdown.className = "interlock-countdown waiting";
+
+        interlockCountdown.textContent = `⏱️ Aguarde ${(
+          restante / 1000
+        ).toFixed(1)} s antes de ativar o Inspecionador.`;
+      }
+    }
+
+    // ===============================================
+    // GAP APÓS DESLIGAR O INSPECIONADOR
+    // ===============================================
+    else if (inspectorOffTime > 0 && tempoDesdeInspecionador < INTERLOCK_TIME) {
+      const restante = INTERLOCK_TIME - tempoDesdeInspecionador;
+
+      const progresso = (tempoDesdeInspecionador / INTERLOCK_TIME) * 100;
+
+      if (interlockStatus) {
+        interlockStatus.className = "interlock-status waiting";
+
+        interlockStatus.textContent = "● Intervalo de segurança";
+      }
+
+      if (interlockProgress) {
+        interlockProgress.style.width = `${progresso}%`;
+      }
+
+      if (interlockCountdown) {
+        interlockCountdown.className = "interlock-countdown waiting";
+
+        interlockCountdown.textContent = `⏱️ Aguarde ${(
+          restante / 1000
+        ).toFixed(1)} s antes de ativar a Garra.`;
+      }
+    }
+
+    // ===============================================
+    // PRONTO
+    // ===============================================
+    else {
+      if (interlockStatus) {
+        interlockStatus.className = "interlock-status ready";
+
+        interlockStatus.textContent = "● Pronto";
+      }
+
+      if (interlockProgress) {
+        interlockProgress.style.width = "100%";
+      }
+
+      if (interlockCountdown) {
+        interlockCountdown.className = "interlock-countdown";
+
+        interlockCountdown.textContent =
+          "Sistema pronto — intervalo de segurança concluído.";
+      }
+    }
+  }
+
+  // ===================================================
+  // PROTEÇÃO VISUAL EXTRA
+  // ===================================================
+
+  if (garra && inspecionador) {
+    if (interlockStatus) {
+      interlockStatus.className = "interlock-status blocked";
+
+      interlockStatus.textContent = "● BLOQUEIO";
+    }
+
+    if (interlockProgress) {
+      interlockProgress.style.width = "0%";
+    }
+
+    if (interlockCountdown) {
+      interlockCountdown.className = "interlock-countdown waiting";
+
+      interlockCountdown.textContent =
+        "⚠️ Garra e Inspecionador não podem estar ativos simultaneamente.";
+    }
+  }
+
+  // ===================================================
+  // SALVAR ESTADOS
+  // ===================================================
+
+  lastGripperState = garra;
+
+  lastInspectorState = inspecionador;
+}
+
+// =====================================================
+// ATUALIZAÇÃO CONTÍNUA DO CONTADOR
+// =====================================================
+
+setInterval(() => {
+  atualizarIntertravamentoUI(lastGripperState, lastInspectorState);
+}, 100);
 
 // =====================================================
 // STATUS MQTT
@@ -358,6 +595,17 @@ function setCommand(value) {
       light.classList.add("off");
     }
   }
+
+  // -------------------------------------------------
+  // ATUALIZAR INTERTRAVAMENTO
+  // -------------------------------------------------
+  //
+  // Posição 1 = Garra
+  // Posição 3 = Inspecionador
+  //
+  // -------------------------------------------------
+
+  atualizarIntertravamentoUI(value[1] === "1", value[3] === "1");
 }
 
 // =====================================================
@@ -389,6 +637,7 @@ async function startCameraFunction() {
     video.srcObject = cameraStream;
 
     // Espera o vídeo carregar
+
     await new Promise((resolve) => {
       if (video.readyState >= 2) {
         resolve();
@@ -479,6 +728,7 @@ function stopCameraFunction() {
   stableFrames = 0;
 
   // Estado seguro
+
   setCommand("00000");
 }
 
