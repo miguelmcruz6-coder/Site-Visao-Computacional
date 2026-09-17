@@ -1,70 +1,4 @@
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <PubSubClient.h>
-
-// =====================================================
-// WIFI
-// =====================================================
-
-const char *WIFI_SSID =
-    "FIERGS-CHROMEBOOK";
-
-const char *WIFI_PASSWORD =
-    "chromefiergs";
-
-// =====================================================
-// HIVE MQ CLOUD
-// =====================================================
-//
-// ATENÇÃO:
-// Use exatamente o hostname mostrado em:
-//
-// HiveMQ Cloud
-// -> seu cluster
-// -> Overview
-// -> Connection Details
-//
-// Exemplo:
-//
-// abc123.s1.eu.hivemq.cloud
-//
-// =====================================================
-
-const char *MQTT_SERVER =
-    "9927a23299b84ac78820c07e11c8d448.s1.eu.hivemq.cloud";
-
-const int MQTT_PORT =
-    8883;
-
-// =====================================================
-// CREDENCIAL EXCLUSIVA DO ESP32
-// =====================================================
-
-const char *MQTT_USER =
-    "hivemq.webclient.1789562292116";
-
-const char *MQTT_PASSWORD =
-    "jpFACDmz$jXzrHghKwz6ftrHACRxOow%";
-
-// =====================================================
-// CLIENT ID
-// =====================================================
-//
-// O Client ID precisa ser único.
-//
-// =====================================================
-
-String MQTT_CLIENT_ID;
-
-// =====================================================
-// TÓPICOS
-// =====================================================
-
-const char *MQTT_TOPIC =
-    "automacao/maquina/dedos";
-
-const char *MQTT_STOP_TOPIC =
-    "automacao/maquina/emergencia";
+#include "config.h"
 
 // =====================================================
 // OUTPUTS
@@ -81,26 +15,35 @@ const int Esteira = 22;
 const int Trava = 23;
 
 // =====================================================
+// INTERTRAVAMENTO GARRA / INSPECIONADOR
+// =====================================================
+
+const unsigned long TEMPO_INTERTRAVAMENTO = 2000;
+
+// Momento em que cada saída foi desligada
+unsigned long momentoDesligamentoGarra = 0;
+
+unsigned long momentoDesligamentoInspecionador = 0;
+
+// Estado atual efetivo das saídas
+bool estadoGarra = false;
+
+bool estadoInspecionador = false;
+
+// Estado solicitado pelo MQTT
+bool solicitacaoGarra = false;
+
+bool solicitacaoInspecionador = false;
+
+// =====================================================
 // SEGURANÇA
 // =====================================================
 
-const unsigned long TIMEOUT_MQTT =
-    1000;
+const unsigned long TIMEOUT_MQTT = 1000;
 
-unsigned long ultimaMensagem =
-    0;
+unsigned long ultimaMensagem = 0;
 
-bool emergencia =
-    false;
-
-// =====================================================
-// MQTT
-// =====================================================
-
-WiFiClientSecure espClient;
-
-PubSubClient mqttClient(
-    espClient);
+bool emergencia = false;
 
 // =====================================================
 // DESLIGAR TUDO
@@ -108,25 +51,263 @@ PubSubClient mqttClient(
 
 void desligarTodos()
 {
-  digitalWrite(
-      Inspecionador,
-      LOW);
+digitalWrite(
+Inspecionador,
+LOW);
 
-  digitalWrite(
-      Garra,
-      LOW);
+digitalWrite(
+    Garra,
+    LOW);
 
-  digitalWrite(
-      Seletor,
-      LOW);
+digitalWrite(
+    Seletor,
+    LOW);
 
-  digitalWrite(
-      Esteira,
-      LOW);
+digitalWrite(
+    Esteira,
+    LOW);
 
-  digitalWrite(
-      Trava,
-      LOW);
+digitalWrite(
+    Trava,
+    LOW);
+
+// Atualiza estados
+estadoGarra = false;
+
+estadoInspecionador = false;
+
+// IMPORTANTE:
+// Quando tudo é desligado por segurança,
+// inicia novamente o tempo de intertravamento.
+
+momentoDesligamentoGarra =
+    millis();
+
+momentoDesligamentoInspecionador =
+    millis();
+
+}
+
+// =====================================================
+// ATUALIZAR GARRA / INSPECIONADOR
+// =====================================================
+
+void atualizarIntertravamento()
+{
+unsigned long agora =
+millis();
+
+// ===================================================
+// EMERGÊNCIA
+// ===================================================
+
+if (emergencia)
+{
+    digitalWrite(
+        Garra,
+        LOW);
+
+    digitalWrite(
+        Inspecionador,
+        LOW);
+
+    estadoGarra = false;
+
+    estadoInspecionador = false;
+
+    return;
+}
+
+// ===================================================
+// DETECTAR DESLIGAMENTO DA GARRA
+// ===================================================
+
+if (
+    estadoGarra == true &&
+    solicitacaoGarra == false)
+{
+    digitalWrite(
+        Garra,
+        LOW);
+
+    estadoGarra = false;
+
+    momentoDesligamentoGarra =
+        agora;
+
+    Serial.println(
+        "GARRA desligada.");
+}
+
+// ===================================================
+// DETECTAR DESLIGAMENTO DO INSPECIONADOR
+// ===================================================
+
+if (
+    estadoInspecionador == true &&
+    solicitacaoInspecionador == false)
+{
+    digitalWrite(
+        Inspecionador,
+        LOW);
+
+    estadoInspecionador = false;
+
+    momentoDesligamentoInspecionador =
+        agora;
+
+    Serial.println(
+        "INSPECIONADOR desligado.");
+}
+
+// ===================================================
+// GARRA
+// ===================================================
+
+if (
+    solicitacaoGarra == true)
+{
+    // -------------------------------------------------
+    // Inspecionador precisa estar desligado
+    // -------------------------------------------------
+
+    if (
+        estadoInspecionador == true)
+    {
+        // Não liga a Garra enquanto
+        // Inspecionador estiver ligado.
+
+        digitalWrite(
+            Garra,
+            LOW);
+
+        estadoGarra = false;
+
+        return;
+    }
+
+    // -------------------------------------------------
+    // Verificar os 2 segundos
+    // -------------------------------------------------
+
+    if (
+        agora -
+            momentoDesligamentoInspecionador >=
+        TEMPO_INTERTRAVAMENTO)
+    {
+        if (
+            estadoGarra == false)
+        {
+            digitalWrite(
+                Garra,
+                HIGH);
+
+            estadoGarra = true;
+
+            Serial.println(
+                "GARRA ligada.");
+        }
+    }
+    else
+    {
+        digitalWrite(
+            Garra,
+            LOW);
+
+        estadoGarra = false;
+    }
+}
+
+// ===================================================
+// INSPECIONADOR
+// ===================================================
+
+if (
+    solicitacaoInspecionador == true)
+{
+    // -------------------------------------------------
+    // Garra precisa estar desligada
+    // -------------------------------------------------
+
+    if (
+        estadoGarra == true)
+    {
+        // Não liga o Inspecionador enquanto
+        // Garra estiver ligada.
+
+        digitalWrite(
+            Inspecionador,
+            LOW);
+
+        estadoInspecionador = false;
+
+        return;
+    }
+
+    // -------------------------------------------------
+    // Verificar os 2 segundos
+    // -------------------------------------------------
+
+    if (
+        agora -
+            momentoDesligamentoGarra >=
+        TEMPO_INTERTRAVAMENTO)
+    {
+        if (
+            estadoInspecionador == false)
+        {
+            digitalWrite(
+                Inspecionador,
+                HIGH);
+
+            estadoInspecionador = true;
+
+            Serial.println(
+                "INSPECIONADOR ligado.");
+        }
+    }
+    else
+    {
+        digitalWrite(
+            Inspecionador,
+            LOW);
+
+        estadoInspecionador = false;
+    }
+}
+
+// ===================================================
+// GARANTIA DE SEGURANÇA
+// ===================================================
+
+// Nunca permitir os dois ligados ao mesmo tempo.
+
+if (
+    estadoGarra == true &&
+    estadoInspecionador == true)
+{
+    Serial.println(
+        "ERRO: GARRA E INSPECIONADOR SIMULTANEAMENTE!");
+
+    digitalWrite(
+        Garra,
+        LOW);
+
+    digitalWrite(
+        Inspecionador,
+        LOW);
+
+    estadoGarra = false;
+
+    estadoInspecionador = false;
+
+    momentoDesligamentoGarra =
+        agora;
+
+    momentoDesligamentoInspecionador =
+        agora;
+}
+
 }
 
 // =====================================================
@@ -134,179 +315,184 @@ void desligarTodos()
 // =====================================================
 
 void processarDedos(
-    String mensagem)
+String mensagem)
 {
-  mensagem.trim();
+mensagem.trim();
 
-  Serial.print(
-      "Processando: ");
+Serial.print(
+    "Processando: ");
 
-  Serial.println(
-      mensagem);
+Serial.println(
+    mensagem);
 
-  // ---------------------------------------------------
-  // EMERGÊNCIA
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// EMERGÊNCIA
+// ---------------------------------------------------
 
-  if (emergencia)
-  {
+if (emergencia)
+{
     Serial.println(
         "EMERGENCIA ATIVA - comando ignorado");
 
     desligarTodos();
 
     return;
-  }
+}
 
-  // ---------------------------------------------------
-  // VALIDAR TAMANHO
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// VALIDAR TAMANHO
+// ---------------------------------------------------
 
-  if (
-      mensagem.length() != 5)
-  {
+if (
+    mensagem.length() != 5)
+{
     Serial.println(
         "ERRO: mensagem deve ter 5 caracteres");
 
     desligarTodos();
 
     return;
-  }
+}
 
-  // ---------------------------------------------------
-  // VALIDAR 0/1
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// VALIDAR 0/1
+// ---------------------------------------------------
 
-  for (
-      int i = 0;
-      i < 5;
-      i++)
-  {
+for (
+    int i = 0;
+    i < 5;
+    i++)
+{
     if (
         mensagem.charAt(i) != '0' &&
         mensagem.charAt(i) != '1')
     {
-      Serial.println(
-          "ERRO: mensagem contém caractere inválido");
+        Serial.println(
+            "ERRO: mensagem contém caractere inválido");
 
-      desligarTodos();
+        desligarTodos();
 
-      return;
+        return;
     }
-  }
+}
 
-  // ---------------------------------------------------
-  // ATUALIZA WATCHDOG
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// ATUALIZA WATCHDOG
+// ---------------------------------------------------
 
-  ultimaMensagem =
-      millis();
+ultimaMensagem =
+    millis();
 
-  // ---------------------------------------------------
-  // DEDOS
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// DEDOS
+// ---------------------------------------------------
 
-  bool polegar =
-      mensagem.charAt(0) == '1';
+bool polegar =
+    mensagem.charAt(0) == '1';
 
-  bool indicador =
-      mensagem.charAt(1) == '1';
+bool indicador =
+    mensagem.charAt(1) == '1';
 
-  bool medio =
-      mensagem.charAt(2) == '1';
+bool medio =
+    mensagem.charAt(2) == '1';
 
-  bool anelar =
-      mensagem.charAt(3) == '1';
+bool anelar =
+    mensagem.charAt(3) == '1';
 
-  bool minimo =
-      mensagem.charAt(4) == '1';
+bool minimo =
+    mensagem.charAt(4) == '1';
 
-  // ---------------------------------------------------
-  // DEBUG
-  // ---------------------------------------------------
+// ---------------------------------------------------
+// DEBUG
+// ---------------------------------------------------
 
-  Serial.println(
-      "----------------------------");
+Serial.println(
+    "----------------------------");
 
-  Serial.print(
-      "Polegar: ");
+Serial.print(
+    "Polegar: ");
 
-  Serial.println(
-      polegar
-          ? "ON"
-          : "OFF");
+Serial.println(
+    polegar
+        ? "ON"
+        : "OFF");
 
-  Serial.print(
-      "Indicador: ");
+Serial.print(
+    "Indicador: ");
 
-  Serial.println(
-      indicador
-          ? "ON"
-          : "OFF");
+Serial.println(
+    indicador
+        ? "ON"
+        : "OFF");
 
-  Serial.print(
-      "Medio: ");
+Serial.print(
+    "Medio: ");
 
-  Serial.println(
-      medio
-          ? "ON"
-          : "OFF");
+Serial.println(
+    medio
+        ? "ON"
+        : "OFF");
 
-  Serial.print(
-      "Anelar: ");
+Serial.print(
+    "Anelar: ");
 
-  Serial.println(
-      anelar
-          ? "ON"
-          : "OFF");
+Serial.println(
+    anelar
+        ? "ON"
+        : "OFF");
 
-  Serial.print(
-      "Minimo: ");
+Serial.print(
+    "Minimo: ");
 
-  Serial.println(
-      minimo
-          ? "ON"
-          : "OFF");
+Serial.println(
+    minimo
+        ? "ON"
+        : "OFF");
 
-  // ---------------------------------------------------
-  // OUTPUTS
-  // ---------------------------------------------------
+// ===================================================
+// ATUALIZAR SOLICITAÇÕES
+// ===================================================
 
-  digitalWrite(
-      Esteira,
-      polegar
-          ? HIGH
-          : LOW);
+solicitacaoGarra =
+    indicador;
 
-  digitalWrite(
-      Garra,
-      indicador
-          ? HIGH
-          : LOW);
+solicitacaoInspecionador =
+    anelar;
 
-  digitalWrite(
-      Seletor,
-      medio
-          ? HIGH
-          : LOW);
+// ===================================================
+// OUTPUTS INDEPENDENTES
+// ===================================================
 
-  digitalWrite(
-      Inspecionador,
-      anelar
-          ? HIGH
-          : LOW);
+digitalWrite(
+    Esteira,
+    polegar
+        ? HIGH
+        : LOW);
 
-  digitalWrite(
-      Trava,
-      minimo
-          ? HIGH
-          : LOW);
+digitalWrite(
+    Seletor,
+    medio
+        ? HIGH
+        : LOW);
 
-  Serial.println(
-      "Outputs atualizados.");
+digitalWrite(
+    Trava,
+    minimo
+        ? HIGH
+        : LOW);
 
-  Serial.println(
-      "----------------------------");
+// ===================================================
+// INTERTRAVAMENTO
+// ===================================================
+
+atualizarIntertravamento();
+
+Serial.println(
+    "Outputs atualizados.");
+
+Serial.println(
+    "----------------------------");
+
 }
 
 // =====================================================
@@ -314,60 +500,60 @@ void processarDedos(
 // =====================================================
 
 void callback(
-    char *topic,
-    byte *payload,
-    unsigned int length)
+char *topic,
+byte *payload,
+unsigned int length)
 {
-  Serial.println();
-  Serial.println(
-      "================================");
+Serial.println();
 
-  Serial.println(
-      "MENSAGEM MQTT RECEBIDA!");
+Serial.println(
+    "================================");
 
-  Serial.print(
-      "Topic: ");
+Serial.println(
+    "MENSAGEM MQTT RECEBIDA!");
 
-  Serial.println(
-      topic);
+Serial.print(
+    "Topic: ");
 
-  Serial.print(
-      "Tamanho: ");
+Serial.println(
+    topic);
 
-  Serial.println(
-      length);
+Serial.print(
+    "Tamanho: ");
 
-  String mensagem =
-      "";
+Serial.println(
+    length);
 
-  for (
-      unsigned int i = 0;
-      i < length;
-      i++)
-  {
+String mensagem =
+    "";
+
+for (
+    unsigned int i = 0;
+    i < length;
+    i++)
+{
     mensagem +=
         (char)payload[i];
-  }
+}
 
-  Serial.print(
-      "Payload: [");
+Serial.print(
+    "Payload: [");
 
-  Serial.print(
-      mensagem);
+Serial.print(
+    mensagem);
 
-  Serial.println(
-      "]");
+Serial.println(
+    "]");
 
-  // ===================================================
-  // EMERGÊNCIA
-  // ===================================================
+// ===================================================
+// EMERGÊNCIA
+// ===================================================
 
-  if (
-      strcmp(
-          topic,
-          MQTT_STOP_TOPIC) == 0)
-  {
-
+if (
+    strcmp(
+        topic,
+        MQTT_STOP_TOPIC) == 0)
+{
     Serial.println(
         "TOPICO DE EMERGENCIA");
 
@@ -375,247 +561,70 @@ void callback(
         mensagem == "STOP" ||
         mensagem == "EMERGENCY")
     {
+        emergencia =
+            true;
 
-      emergencia =
-          true;
+        solicitacaoGarra =
+            false;
 
-      desligarTodos();
+        solicitacaoInspecionador =
+            false;
 
-      Serial.println(
-          "!!! EMERGENCIA ATIVADA !!!");
+        desligarTodos();
+
+        Serial.println(
+            "!!! EMERENCIA ATIVADA !!!");
     }
 
     else if (
         mensagem == "RESET")
     {
+        emergencia =
+            false;
 
-      emergencia =
-          false;
+        solicitacaoGarra =
+            false;
 
-      ultimaMensagem =
-          millis();
+        solicitacaoInspecionador =
+            false;
 
-      desligarTodos();
+        ultimaMensagem =
+            millis();
 
-      Serial.println(
-          "Emergencia resetada.");
+        desligarTodos();
+
+        Serial.println(
+            "Emergencia resetada.");
     }
 
     Serial.println(
         "================================");
 
     return;
-  }
+}
 
-  // ===================================================
-  // DEDOS
-  // ===================================================
+// ===================================================
+// DEDOS
+// ===================================================
 
-  if (
-      strcmp(
-          topic,
-          MQTT_TOPIC) == 0)
-  {
-
+if (
+    strcmp(
+        topic,
+        MQTT_TOPIC) == 0)
+{
     processarDedos(
         mensagem);
-  }
+}
 
-  else
-  {
-
+else
+{
     Serial.println(
         "Topic desconhecido!");
-  }
-
-  Serial.println(
-      "================================");
 }
 
-// =====================================================
-// WIFI
-// =====================================================
+Serial.println(
+    "================================");
 
-void conectarWiFi()
-{
-  Serial.println();
-  Serial.println(
-      "Conectando ao WiFi...");
-
-  WiFi.mode(
-      WIFI_STA);
-
-  WiFi.begin(
-      WIFI_SSID,
-      WIFI_PASSWORD);
-
-  int tentativas =
-      0;
-
-  while (
-      WiFi.status() !=
-      WL_CONNECTED)
-  {
-
-    delay(
-        500);
-
-    Serial.print(
-        ".");
-
-    tentativas++;
-
-    if (
-        tentativas > 40)
-    {
-
-      Serial.println();
-
-      Serial.println(
-          "ERRO: WiFi nao conectou.");
-
-      return;
-    }
-  }
-
-  Serial.println();
-
-  Serial.println(
-      "WiFi conectado!");
-
-  Serial.print(
-      "IP: ");
-
-  Serial.println(
-      WiFi.localIP());
-}
-
-// =====================================================
-// MQTT
-// =====================================================
-
-bool conectarMQTT()
-{
-  Serial.println();
-  Serial.println(
-      "Conectando ao HiveMQ Cloud...");
-
-  Serial.print(
-      "Servidor: ");
-
-  Serial.println(
-      MQTT_SERVER);
-
-  Serial.print(
-      "Porta: ");
-
-  Serial.println(
-      MQTT_PORT);
-
-  Serial.print(
-      "Usuario: ");
-
-  Serial.println(
-      MQTT_USER);
-
-  Serial.print(
-      "Client ID: ");
-
-  Serial.println(
-      MQTT_CLIENT_ID);
-
-  // ---------------------------------------------------
-  // CONECTAR
-  // ---------------------------------------------------
-
-  bool conectado =
-      mqttClient.connect(
-          MQTT_CLIENT_ID.c_str(),
-          MQTT_USER,
-          MQTT_PASSWORD);
-
-  if (
-      conectado)
-  {
-
-    Serial.println();
-    Serial.println(
-        "********************************");
-
-    Serial.println(
-        "     HIVEMQ CONECTADO!");
-
-    Serial.println(
-        "********************************");
-
-    // -------------------------------------------------
-    // SUBSCRIBE DEDOS
-    // -------------------------------------------------
-
-    bool subDedos =
-        mqttClient.subscribe(
-            MQTT_TOPIC,
-            0);
-
-    Serial.print(
-        "Subscribe dedos: ");
-
-    Serial.println(
-        subDedos
-            ? "OK"
-            : "FALHOU");
-
-    // -------------------------------------------------
-    // SUBSCRIBE EMERGENCIA
-    // -------------------------------------------------
-
-    bool subEmergencia =
-        mqttClient.subscribe(
-            MQTT_STOP_TOPIC,
-            0);
-
-    Serial.print(
-        "Subscribe emergencia: ");
-
-    Serial.println(
-        subEmergencia
-            ? "OK"
-            : "FALHOU");
-
-    // -------------------------------------------------
-    // TESTE
-    // -------------------------------------------------
-
-    Serial.println(
-        "Aguardando mensagens...");
-
-    ultimaMensagem =
-        millis();
-
-    return true;
-  }
-
-  // ===================================================
-  // ERRO
-  // ===================================================
-
-  Serial.println();
-  Serial.println(
-      "********************************");
-
-  Serial.println(
-      "     FALHA MQTT");
-
-  Serial.print(
-      "Estado PubSubClient: ");
-
-  Serial.println(
-      mqttClient.state());
-
-  Serial.println(
-      "********************************");
-
-  return false;
 }
 
 // =====================================================
@@ -624,121 +633,118 @@ bool conectarMQTT()
 
 void setup()
 {
-  Serial.begin(
-      115200);
+Serial.begin(
+115200);
 
-  delay(
-      1000);
+delay(
+    1000);
 
-  Serial.println();
-  Serial.println(
-      "================================");
+Serial.println();
 
-  Serial.println(
-      " ESP32 CONTROLE POR GESTOS");
+Serial.println(
+    "================================");
 
-  Serial.println(
-      " HiveMQ Cloud");
+Serial.println(
+    " ESP32 CONTROLE POR GESTOS");
 
-  Serial.println(
-      "================================");
+Serial.println(
+    " HiveMQ Cloud");
 
-  // ===================================================
-  // CLIENT ID ÚNICO
-  // ===================================================
+Serial.println(
+    "================================");
 
-  MQTT_CLIENT_ID =
-      "ESP32_MAQUINA_01_" +
-      String(
-          (uint32_t)
-              ESP.getEfuseMac());
+// ===================================================
+// CLIENT ID / CONFIGURAÇÃO
+// ===================================================
 
-  // ===================================================
-  // OUTPUTS
-  // ===================================================
+initConfig();
 
-  pinMode(
-      Inspecionador,
-      OUTPUT);
+// ===================================================
+// OUTPUTS
+// ===================================================
 
-  pinMode(
-      Garra,
-      OUTPUT);
+pinMode(
+    Inspecionador,
+    OUTPUT);
 
-  pinMode(
-      Seletor,
-      OUTPUT);
+pinMode(
+    Garra,
+    OUTPUT);
 
-  pinMode(
-      Esteira,
-      OUTPUT);
+pinMode(
+    Seletor,
+    OUTPUT);
 
-  pinMode(
-      Trava,
-      OUTPUT);
+pinMode(
+    Esteira,
+    OUTPUT);
 
-  // ===================================================
-  // ESTADO SEGURO
-  // ===================================================
+pinMode(
+    Trava,
+    OUTPUT);
 
-  desligarTodos();
+// ===================================================
+// ESTADO SEGURO
+// ===================================================
 
-  emergencia =
-      false;
+desligarTodos();
 
-  // ===================================================
-  // WIFI
-  // ===================================================
+emergencia =
+    false;
 
-  conectarWiFi();
+solicitacaoGarra =
+    false;
 
-  if (
-      WiFi.status() !=
-      WL_CONNECTED)
-  {
+solicitacaoInspecionador =
+    false;
 
+// ===================================================
+// WIFI
+// ===================================================
+
+conectarWiFi();
+
+if (
+    WiFi.status() !=
+    WL_CONNECTED)
+{
     Serial.println(
         "Sem WiFi. Parando.");
 
     return;
-  }
+}
 
-  // ===================================================
-  // TLS
-  // ===================================================
-  //
-  // Mantemos TLS, mas sem validação da CA durante
-  // este diagnóstico.
-  //
-  // Depois podemos colocar o certificado raiz.
-  //
-  // ===================================================
+// ===================================================
+// TLS
+// ===================================================
+//
+// Mantemos TLS, mas sem validação da CA durante
+// este diagnóstico.
+//
+// Depois podemos colocar o certificado raiz.
+//
+// ===================================================
 
-  espClient.setInsecure();
+espClient.setInsecure();
 
-  // ===================================================
-  // MQTT
-  // ===================================================
+// ===================================================
+// MQTT
+// ===================================================
 
-  mqttClient.setServer(
-      MQTT_SERVER,
-      MQTT_PORT);
+configurarMQTT();
 
-  mqttClient.setCallback(
-      callback);
+definirCallback(
+    callback);
 
-  // Aumenta o tamanho do buffer MQTT.
-  mqttClient.setBufferSize(
-      512);
+// ===================================================
+// CONECTAR
+// ===================================================
 
-  // ===================================================
-  // CONECTAR
-  // ===================================================
+conectarMQTT();
 
-  conectarMQTT();
+ultimaMensagem =
+    millis();
 
-  ultimaMensagem =
-      millis();
 }
 
 // =====================================================
@@ -747,83 +753,93 @@ void setup()
 
 void loop()
 {
-  // ===================================================
-  // WIFI
-  // ===================================================
+// ===================================================
+// WIFI
+// ===================================================
 
-  if (
-      WiFi.status() !=
-      WL_CONNECTED)
-  {
-
+if (
+    WiFi.status() !=
+    WL_CONNECTED)
+{
     desligarTodos();
 
     conectarWiFi();
-  }
+}
 
-  // ===================================================
-  // MQTT
-  // ===================================================
+// ===================================================
+// MQTT
+// ===================================================
 
-  if (
-      !mqttClient.connected())
-  {
-
+if (
+    !mqttClient.connected())
+{
     desligarTodos();
 
     delay(
         1000);
 
     conectarMQTT();
-  }
+}
 
-  // ===================================================
-  // MUITO IMPORTANTE
-  // ===================================================
-  //
-  // Essa chamada processa as mensagens recebidas
-  // pelo PubSubClient e dispara callback().
-  //
-  // ===================================================
+// ===================================================
+// PROCESSAR MQTT
+// ===================================================
 
-  mqttClient.loop();
+mqttClient.loop();
 
-  // ===================================================
-  // TIMEOUT
-  // ===================================================
+// ===================================================
+// ATUALIZAR INTERTRAVAMENTO
+// ===================================================
+//
+// Isso é importante:
+// mesmo sem receber uma nova mensagem MQTT,
+// o sistema verifica se os 2 segundos já passaram.
+//
+// ===================================================
 
-  if (
-      !emergencia)
-  {
+atualizarIntertravamento();
 
+// ===================================================
+// TIMEOUT
+// ===================================================
+
+if (
+    !emergencia)
+{
     if (
         millis() -
             ultimaMensagem >
         TIMEOUT_MQTT)
     {
+        desligarTodos();
 
-      desligarTodos();
+        solicitacaoGarra =
+            false;
 
-      Serial.println(
-          "TIMEOUT MQTT - OUTPUTS OFF");
+        solicitacaoInspecionador =
+            false;
 
-      // Evita imprimir centenas de vezes
-      ultimaMensagem =
-          millis();
+        Serial.println(
+            "TIMEOUT MQTT - OUTPUTS OFF");
+
+        // Evita imprimir centenas de vezes
+
+        ultimaMensagem =
+            millis();
     }
-  }
+}
 
-  // ===================================================
-  // EMERGENCIA
-  // ===================================================
+// ===================================================
+// EMERGENCIA
+// ===================================================
 
-  if (
-      emergencia)
-  {
-
+if (
+    emergencia)
+{
     desligarTodos();
-  }
+}
 
-  delay(
-      2);
+delay(
+    2);
+
 }
