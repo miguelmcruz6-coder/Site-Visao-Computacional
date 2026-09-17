@@ -6,13 +6,11 @@ import {
   MQTT_PASSWORD,
   MQTT_TOPIC,
   MQTT_STOP_TOPIC,
-} from "./Data/mqttConfig";
+} from "./Data/mqttConfig.js";
 
-/*
-=====================================================
- ELEMENTOS HTML
-=====================================================
-*/
+/* =====================================================
+   ELEMENTOS
+===================================================== */
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -24,6 +22,7 @@ const stopCameraBtn = document.getElementById("stopCamera");
 const cameraStatus = document.getElementById("cameraStatus");
 
 const connectMqttBtn = document.getElementById("connectMqtt");
+
 const emergencyBtn = document.getElementById("emergency");
 const resetEmergencyBtn = document.getElementById("resetEmergency");
 
@@ -40,78 +39,97 @@ const lights = [
   document.getElementById("light4"),
 ];
 
-/*
-=====================================================
- ESTADO
-=====================================================
-*/
+/* =====================================================
+   VARIÁVEIS
+===================================================== */
 
-let camera = null;
 let stream = null;
+let camera = null;
 let mqttClient = null;
 
-let emergencyActive = false;
+let dedos = [0, 0, 0, 0, 0];
 
-// Estado atual dos dedos
-let fingers = [0, 0, 0, 0, 0];
+let ultimoComando = "";
 
-// Controle do intertravamento
+let emergenciaAtiva = false;
+
+/*
+   Controle do intertravamento
+
+   dedo 1 = Garra
+   dedo 3 = Inspecionador
+*/
+
 let garraBloqueada = false;
 let inspecionadorBloqueado = false;
 
-// Timers de liberação
-let garraTimer = null;
-let inspecionadorTimer = null;
+let timerGarra = null;
+let timerInspecionador = null;
 
-// Último comando enviado
-let lastCommand = "";
+/* =====================================================
+   MQTT
+===================================================== */
 
-/*
-=====================================================
- MQTT
-=====================================================
-*/
-
-function connectMQTT() {
+function conectarMQTT() {
   if (mqttClient && mqttClient.connected) {
     console.log("MQTT já está conectado.");
     return;
   }
 
+  console.log("Iniciando conexão MQTT...");
+
   mqttStatus.textContent = "MQTT conectando...";
   mqttStatus.className = "status offline";
 
+  /*
+     HiveMQ WebSocket
+
+     Porta 8884 = WSS
+  */
+
   const url = `wss://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
 
-  console.log("Conectando ao MQTT:", url);
+  console.log("URL MQTT:", url);
 
   mqttClient = mqtt.connect(url, {
     username: MQTT_USERNAME,
     password: MQTT_PASSWORD,
+
     clean: true,
+
     reconnectPeriod: 3000,
+
+    connectTimeout: 10000,
   });
 
   mqttClient.on("connect", () => {
-    console.log("MQTT conectado.");
+    console.log("MQTT conectado!");
 
     mqttStatus.textContent = "MQTT conectado";
     mqttStatus.className = "status online";
 
     connectMqttBtn.textContent = "✅ MQTT conectado";
 
+    /*
+       Envia o estado atual assim que conectar
+    */
+
+    ultimoComando = "";
+
     enviarComando();
   });
 
-  mqttClient.on("reconnect", () => {
-    mqttStatus.textContent = "MQTT reconectando...";
+  mqttClient.on("error", (erro) => {
+    console.error("Erro MQTT:", erro);
+
+    mqttStatus.textContent = "Erro MQTT";
     mqttStatus.className = "status offline";
   });
 
-  mqttClient.on("error", (error) => {
-    console.error("Erro MQTT:", error);
+  mqttClient.on("reconnect", () => {
+    console.log("Tentando reconectar MQTT...");
 
-    mqttStatus.textContent = "Erro MQTT";
+    mqttStatus.textContent = "MQTT reconectando...";
     mqttStatus.className = "status offline";
   });
 
@@ -125,251 +143,282 @@ function connectMQTT() {
   });
 }
 
-/*
-=====================================================
- ENVIO MQTT
-=====================================================
-*/
+/* =====================================================
+   ENVIAR COMANDO
+===================================================== */
 
 function enviarComando() {
+  const comando = dedos.join("");
+
+  /*
+     Mostra sempre na interface
+  */
+
+  commandDisplay.textContent = comando;
+  mqttCommand.textContent = comando;
+
+  /*
+     Se MQTT não estiver conectado,
+     apenas atualiza a interface.
+  */
+
   if (!mqttClient || !mqttClient.connected) {
     return;
   }
 
-  const comando = fingers.join("");
+  /*
+     Não envia o mesmo comando repetidamente.
+  */
 
-  if (comando === lastCommand) {
+  if (comando === ultimoComando) {
     return;
   }
 
-  lastCommand = comando;
+  ultimoComando = comando;
 
-  mqttClient.publish(MQTT_TOPIC, comando, {
-    qos: 0,
-    retain: false,
-  });
-
-  mqttCommand.textContent = comando;
-
-  console.log("Comando enviado:", comando);
-}
-
-/*
-=====================================================
- EMERGÊNCIA
-=====================================================
-*/
-
-function ativarEmergencia() {
-  emergencyActive = true;
-
-  const comandoEmergencia = "11111";
-
-  if (mqttClient && mqttClient.connected) {
-    mqttClient.publish(MQTT_STOP_TOPIC, comandoEmergencia, {
-      qos: 1,
+  mqttClient.publish(
+    MQTT_TOPIC,
+    comando,
+    {
+      qos: 0,
       retain: false,
-    });
-  }
+    },
+    (erro) => {
+      if (erro) {
+        console.error("Erro ao publicar:", erro);
+        return;
+      }
 
-  console.warn("🚨 EMERGÊNCIA ATIVADA");
-
-  emergencyBtn.textContent = "🚨 EMERGÊNCIA ATIVA";
+      console.log("MQTT enviado:", comando);
+    }
+  );
 }
 
-function resetarEmergencia() {
-  emergencyActive = false;
+/* =====================================================
+   ATUALIZAR INTERFACE
+===================================================== */
 
-  emergencyBtn.textContent = "🛑 EMERGÊNCIA";
-
-  console.log("Emergência resetada.");
-
-  enviarComando();
-}
-
-/*
-=====================================================
- INTERTRAVAMENTO
-=====================================================
-
-Garra = dedo 1
-Inspecionador = dedo 3
-
-Quando uma função é acionada:
-
-1. A outra é desligada imediatamente.
-2. A outra fica bloqueada.
-3. Após 2 segundos, ela pode ser acionada novamente.
-=====================================================
-*/
-
-function ativarGarra() {
-  if (garraBloqueada || emergencyActive) {
-    return;
+function atualizarInterface() {
+  for (let i = 0; i < 5; i++) {
+    if (dedos[i] === 1) {
+      lights[i].classList.add("on");
+    } else {
+      lights[i].classList.remove("on");
+    }
   }
 
-  console.log("🦾 Garra acionada.");
-
-  // Desativa o inspecionador
-  fingers[3] = 0;
-  atualizarLuzes();
-
-  // Bloqueia o inspecionador
-  inspecionadorBloqueado = true;
-
-  clearTimeout(inspecionadorTimer);
-
-  inspecionadorTimer = setTimeout(() => {
-    inspecionadorBloqueado = false;
-
-    console.log("✅ Inspecionador liberado após 2 segundos.");
-
-    atualizarComando();
-  }, 2000);
-
-  atualizarComando();
-}
-
-function ativarInspecionador() {
-  if (inspecionadorBloqueado || emergencyActive) {
-    return;
-  }
-
-  console.log("🔍 Inspecionador acionado.");
-
-  // Desativa a garra
-  fingers[1] = 0;
-  atualizarLuzes();
-
-  // Bloqueia a garra
-  garraBloqueada = true;
-
-  clearTimeout(garraTimer);
-
-  garraTimer = setTimeout(() => {
-    garraBloqueada = false;
-
-    console.log("✅ Garra liberada após 2 segundos.");
-
-    atualizarComando();
-  }, 2000);
-
-  atualizarComando();
-}
-
-/*
-=====================================================
- PROCESSAMENTO DO COMANDO
-=====================================================
-*/
-
-function atualizarComando() {
-  if (emergencyActive) {
-    return;
-  }
-
-  const comando = fingers.join("");
+  const comando = dedos.join("");
 
   commandDisplay.textContent = comando;
+  mqttCommand.textContent = comando;
+}
+
+/* =====================================================
+   INTERTRAVAMENTO - GARRA
+===================================================== */
+
+function acionarGarra() {
+  if (garraBloqueada) {
+    console.log("Garra bloqueada.");
+    return;
+  }
+
+  console.log("🦾 GARRA acionada.");
+
+  /*
+     Desliga imediatamente o Inspecionador
+  */
+
+  dedos[3] = 0;
+
+  /*
+     Bloqueia o Inspecionador
+     durante 2 segundos
+  */
+
+  inspecionadorBloqueado = true;
+
+  clearTimeout(timerInspecionador);
+
+  timerInspecionador = setTimeout(() => {
+    inspecionadorBloqueado = false;
+
+    console.log("✅ Inspecionador liberado.");
+  }, 2000);
+
+  atualizarInterface();
 
   enviarComando();
 }
 
-/*
-=====================================================
- ATUALIZAÇÃO DAS LUZES
-=====================================================
-*/
+/* =====================================================
+   INTERTRAVAMENTO - INSPECIONADOR
+===================================================== */
 
-function atualizarLuzes() {
-  fingers.forEach((value, index) => {
-    if (value === 1) {
-      lights[index].classList.add("on");
-    } else {
-      lights[index].classList.remove("on");
-    }
-  });
-
-  commandDisplay.textContent = fingers.join("");
-}
-
-/*
-=====================================================
- DETECÇÃO DOS DEDOS
-=====================================================
-*/
-
-function processarDedos(dedosDetectados) {
-  if (emergencyActive) {
+function acionarInspecionador() {
+  if (inspecionadorBloqueado) {
+    console.log("Inspecionador bloqueado.");
     return;
   }
 
-  const novoEstado = [...dedosDetectados];
+  console.log("🔍 INSPECIONADOR acionado.");
 
   /*
-  ---------------------------------------------
-  GARRA
-  ---------------------------------------------
+     Desliga imediatamente a Garra
   */
 
-  if (novoEstado[1] === 1) {
-    if (garraBloqueada) {
-      novoEstado[1] = 0;
-    } else if (fingers[1] === 0) {
-      fingers = novoEstado;
-
-      ativarGarra();
-
-      return;
-    }
-  }
+  dedos[1] = 0;
 
   /*
-  ---------------------------------------------
-  INSPECIONADOR
-  ---------------------------------------------
+     Bloqueia a Garra
+     durante 2 segundos
   */
 
-  if (novoEstado[3] === 1) {
-    if (inspecionadorBloqueado) {
-      novoEstado[3] = 0;
-    } else if (fingers[3] === 0) {
-      fingers = novoEstado;
+  garraBloqueada = true;
 
-      ativarInspecionador();
+  clearTimeout(timerGarra);
 
-      return;
-    }
-  }
+  timerGarra = setTimeout(() => {
+    garraBloqueada = false;
 
-  /*
-  ---------------------------------------------
-  APLICA OS DEMAIS DEDOS
-  ---------------------------------------------
-  */
+    console.log("✅ Garra liberada.");
+  }, 2000);
 
-  fingers = novoEstado;
+  atualizarInterface();
 
-  atualizarLuzes();
-  atualizarComando();
+  enviarComando();
 }
 
-/*
-=====================================================
- MEDIA PIPE - MÃOS
-=====================================================
-*/
+/* =====================================================
+   PROCESSAR DEDOS
+===================================================== */
+
+function processarDedos(novosDedos) {
+  if (emergenciaAtiva) {
+    return;
+  }
+
+  const estadoAnterior = [...dedos];
+
+  /*
+     -----------------------------------------------
+     GARRA
+     -----------------------------------------------
+  */
+
+  if (estadoAnterior[1] === 0 && novosDedos[1] === 1) {
+    if (!garraBloqueada) {
+      dedos = [...novosDedos];
+
+      acionarGarra();
+
+      return;
+    } else {
+      novosDedos[1] = 0;
+    }
+  }
+
+  /*
+     -----------------------------------------------
+     INSPECIONADOR
+     -----------------------------------------------
+  */
+
+  if (estadoAnterior[3] === 0 && novosDedos[3] === 1) {
+    if (!inspecionadorBloqueado) {
+      dedos = [...novosDedos];
+
+      acionarInspecionador();
+
+      return;
+    } else {
+      novosDedos[3] = 0;
+    }
+  }
+
+  /*
+     -----------------------------------------------
+     ATUALIZA OS DEMAIS DEDOS
+     -----------------------------------------------
+  */
+
+  dedos = [...novosDedos];
+
+  atualizarInterface();
+
+  enviarComando();
+}
+
+/* =====================================================
+   DETECTAR DEDOS
+===================================================== */
+
+function detectarDedos(landmarks) {
+  const resultado = [0, 0, 0, 0, 0];
+
+  /*
+     INDICADOR
+  */
+
+  if (landmarks[8].y < landmarks[6].y) {
+    resultado[1] = 1;
+  }
+
+  /*
+     MÉDIO
+  */
+
+  if (landmarks[12].y < landmarks[10].y) {
+    resultado[2] = 1;
+  }
+
+  /*
+     ANELAR
+  */
+
+  if (landmarks[16].y < landmarks[14].y) {
+    resultado[3] = 1;
+  }
+
+  /*
+     MÍNIMO
+  */
+
+  if (landmarks[20].y < landmarks[18].y) {
+    resultado[4] = 1;
+  }
+
+  /*
+     POLEGAR
+
+     Para uma mão espelhada/câmera frontal,
+     usamos comparação horizontal.
+  */
+
+  if (landmarks[4].x < landmarks[3].x) {
+    resultado[0] = 1;
+  }
+
+  return resultado;
+}
+
+/* =====================================================
+   MEDIAPIPE
+===================================================== */
 
 const hands = new Hands({
-  locateFile: (file) => {
-    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+  locateFile: (arquivo) => {
+    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${arquivo}`;
   },
 });
 
 hands.setOptions({
   maxNumHands: 1,
+
   modelComplexity: 1,
+
   minDetectionConfidence: 0.5,
+
   minTrackingConfidence: 0.5,
 });
 
@@ -378,122 +427,78 @@ hands.onResults((results) => {
     return;
   }
 
+  /*
+     Ajusta canvas
+  */
+
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (!results.multiHandLandmarks) {
+  /*
+     Nenhuma mão detectada
+  */
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
     return;
   }
 
-  for (const landmarks of results.multiHandLandmarks) {
-    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
-      color: "#00FF00",
-      lineWidth: 3,
-    });
+  /*
+     Processa a primeira mão
+  */
 
-    drawLandmarks(ctx, landmarks, {
-      color: "#FF0000",
-      lineWidth: 1,
-      radius: 3,
-    });
+  const landmarks = results.multiHandLandmarks[0];
 
-    const dedos = detectarDedos(landmarks);
+  /*
+     Desenha conexões
+  */
 
-    processarDedos(dedos);
-  }
+  drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+    color: "#00FF00",
+    lineWidth: 3,
+  });
+
+  /*
+     Desenha pontos
+  */
+
+  drawLandmarks(ctx, landmarks, {
+    color: "#FF0000",
+    lineWidth: 1,
+    radius: 3,
+  });
+
+  /*
+     Detecta dedos
+  */
+
+  const resultado = detectarDedos(landmarks);
+
+  processarDedos(resultado);
 });
 
-/*
-=====================================================
- DETECTAR DEDOS
-
- Retorna:
-
- [polegar, indicador, medio, anelar, minimo]
-
- 0 = abaixado
- 1 = levantado
-=====================================================
-*/
-
-function detectarDedos(landmarks) {
-  const dedos = [0, 0, 0, 0, 0];
-
-  /*
-  ---------------------------------------------
-  INDICADOR
-  ---------------------------------------------
-  */
-
-  if (landmarks[8].y < landmarks[6].y) {
-    dedos[1] = 1;
-  }
-
-  /*
-  ---------------------------------------------
-  MÉDIO
-  ---------------------------------------------
-  */
-
-  if (landmarks[12].y < landmarks[10].y) {
-    dedos[2] = 1;
-  }
-
-  /*
-  ---------------------------------------------
-  ANELAR
-  ---------------------------------------------
-  */
-
-  if (landmarks[16].y < landmarks[14].y) {
-    dedos[3] = 1;
-  }
-
-  /*
-  ---------------------------------------------
-  MÍNIMO
-  ---------------------------------------------
-  */
-
-  if (landmarks[20].y < landmarks[18].y) {
-    dedos[4] = 1;
-  }
-
-  /*
-  ---------------------------------------------
-  POLEGAR
-
-  Verificação horizontal simples.
-  ---------------------------------------------
-  */
-
-  if (landmarks[4].x < landmarks[3].x) {
-    dedos[0] = 1;
-  }
-
-  return dedos;
-}
-
-/*
-=====================================================
- CÂMERA
-=====================================================
-*/
+/* =====================================================
+   INICIAR CÂMERA
+===================================================== */
 
 async function iniciarCamera() {
   try {
+    console.log("Solicitando câmera...");
+
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "user",
+
         width: {
           ideal: 1280,
         },
+
         height: {
           ideal: 720,
         },
       },
+
       audio: false,
     });
 
@@ -504,7 +509,12 @@ async function iniciarCamera() {
     cameraStatus.textContent = "Câmera funcionando";
 
     startCameraBtn.disabled = true;
+
     stopCameraBtn.disabled = false;
+
+    /*
+       MediaPipe Camera
+    */
 
     camera = new Camera(video, {
       onFrame: async () => {
@@ -512,23 +522,35 @@ async function iniciarCamera() {
           image: video,
         });
       },
+
       width: 1280,
+
       height: 720,
     });
 
     camera.start();
 
     console.log("📷 Câmera iniciada.");
-  } catch (error) {
-    console.error("Erro ao iniciar câmera:", error);
+  } catch (erro) {
+    console.error("Erro ao iniciar câmera:", erro);
 
     cameraStatus.textContent = "Erro ao acessar câmera";
+
+    alert(
+      "Não foi possível acessar a câmera.\n\n" +
+        "Verifique a permissão do navegador."
+    );
   }
 }
+
+/* =====================================================
+   PARAR CÂMERA
+===================================================== */
 
 function pararCamera() {
   if (camera) {
     camera.stop();
+
     camera = null;
   }
 
@@ -545,34 +567,73 @@ function pararCamera() {
   cameraStatus.textContent = "Câmera parada";
 
   startCameraBtn.disabled = false;
+
   stopCameraBtn.disabled = true;
 
   console.log("⏹ Câmera parada.");
 }
 
-/*
-=====================================================
- EVENTOS
-=====================================================
-*/
+/* =====================================================
+   EMERGÊNCIA
+===================================================== */
+
+function ativarEmergencia() {
+  emergenciaAtiva = true;
+
+  /*
+     Zera todos os dedos
+  */
+
+  dedos = [0, 0, 0, 0, 0];
+
+  atualizarInterface();
+
+  /*
+     Envia comando de emergência
+  */
+
+  if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(MQTT_STOP_TOPIC, "STOP", {
+      qos: 1,
+      retain: false,
+    });
+
+    console.log("🚨 EMERGÊNCIA enviada via MQTT.");
+  }
+
+  emergencyBtn.textContent = "🚨 EMERGÊNCIA ATIVA";
+}
+
+function resetarEmergencia() {
+  emergenciaAtiva = false;
+
+  emergencyBtn.textContent = "🛑 EMERGÊNCIA";
+
+  ultimoComando = "";
+
+  enviarComando();
+
+  console.log("↻ Emergência resetada.");
+}
+
+/* =====================================================
+   EVENTOS
+===================================================== */
 
 startCameraBtn.addEventListener("click", iniciarCamera);
 
 stopCameraBtn.addEventListener("click", pararCamera);
 
-connectMqttBtn.addEventListener("click", connectMQTT);
+connectMqttBtn.addEventListener("click", conectarMQTT);
 
 emergencyBtn.addEventListener("click", ativarEmergencia);
 
 resetEmergencyBtn.addEventListener("click", resetarEmergencia);
 
-/*
-=====================================================
- INICIALIZAÇÃO
-=====================================================
-*/
+/* =====================================================
+   INICIALIZAÇÃO
+===================================================== */
 
-atualizarLuzes();
-atualizarComando();
+atualizarInterface();
 
-console.log("Sistema de controle por gestos iniciado.");
+console.log("✅ Script carregado corretamente.");
